@@ -223,20 +223,35 @@ cmd_link() {
       echo \"Lib dir  : \${LIBDIR}\"
       echo \"GCC lib  : \${GCC_LIBDIR}\"
 
-      # Library order for circular deps:
-      #   libretrocrt: CRT startup; its malloc.c needs __mulsi3 (libgcc) and memcpy (libc);
-      #                its syscalls.c needs Mac File Manager traps (libInterface).
-      #   libgcc:      soft-math helpers (__mulsi3, __udivsi3) — compiled by GCC for 68000.
-      #                Lives in GCC's private lib/gcc/<target>/<ver>/ directory, not LIBDIR.
-      #   libInterface: ALL Mac Toolbox A-trap stubs; required by libretrocrt syscalls.
-      #   Repeat -lretrocrt after -lc/-lgcc to resolve circular libc ↔ retrocrt deps.
+      # Diagnostic: confirm libInterface.a and libgcc.a export the symbols we need.
+      echo \"=== lib diagnostics ===\"
+      nm \"\${LIBDIR}/libInterface.a\" 2>/dev/null | grep ' T FSWRITE' | head -3 \
+        && echo 'libInterface.a: FSWRITE found' \
+        || echo 'libInterface.a: FSWRITE NOT found (may cause link failure)'
+      nm \"\${GCC_LIBDIR}/libgcc.a\" 2>/dev/null | grep ' T __mulsi3' | head -1 \
+        && echo 'libgcc.a: __mulsi3 found' \
+        || echo 'libgcc.a: __mulsi3 NOT found'
+
+      # Library deps with circular dependency between libretrocrt, libc, libInterface, libgcc:
+      #   libretrocrt:  CRT startup (_start); malloc.c needs __mulsi3 (libgcc) + memcpy (libc);
+      #                 syscalls.c needs Mac File Manager traps (libInterface) + __mulsi3.
+      #   libc:         exit/atexit/memcpy/strcpy; exit() needs _exit (retrocrt — circular).
+      #   libInterface: ALL Mac Toolbox A-trap stubs; required by libretrocrt/syscalls.c.
+      #   libgcc:       soft-math helpers (__mulsi3, __udivsi3) from GCC private lib dir.
+      #
+      # --start-group/--end-group: instructs ld to repeatedly scan all archives in the group
+      # until no new undefined symbols are resolved. This correctly handles:
+      #   1. syscalls.c.obj extracted late (from 2nd retrocrt pass) needing FSWRITE/__mulsi3
+      #   2. libc exit() needing _exit back from retrocrt
+      # Without this, manually repeating -lretrocrt still fails because libInterface and
+      # libgcc are processed BEFORE syscalls.c.obj is extracted by the second retrocrt pass.
       RETRO68_REAL_LD=\"\${REAL_LD}\" \"\${ELF2MAC}\" \
         --mac-single \
         -o /work/spike/build/hello.bin \
         /work/spike/build/hello.o \
         -L\"\${LIBDIR}\" \
         -L\"\${GCC_LIBDIR}\" \
-        -lretrocrt -lc -lInterface -lgcc -lretrocrt
+        --start-group -lretrocrt -lc -lInterface -lgcc --end-group
 
       echo 'Elf2Mac: OK'
     " \
@@ -390,6 +405,9 @@ cmd_link_toolbox() {
       echo \"Lib dir  : \${LIBDIR}\"
       echo \"GCC lib  : \${GCC_LIBDIR}\"
 
+      # libtoolbox-stubs.a is listed BEFORE -lInterface so our 12 stub functions
+      # shadow Interface's versions; Interface still provides File Manager etc. for the CRT.
+      # --start-group/--end-group handles circular deps between retrocrt/libc/Interface/libgcc.
       RETRO68_REAL_LD=\"\${REAL_LD}\" \"\${ELF2MAC}\" \
         --mac-single \
         -o /work/spike/build/hello_toolbox.bin \
@@ -397,7 +415,7 @@ cmd_link_toolbox() {
         /work/spike/build/libtoolbox-stubs.a \
         -L\"\${LIBDIR}\" \
         -L\"\${GCC_LIBDIR}\" \
-        -lretrocrt -lc -lInterface -lgcc -lretrocrt
+        --start-group -lretrocrt -lc -lInterface -lgcc --end-group
 
       echo 'Elf2Mac (toolbox): OK'
     " \

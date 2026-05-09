@@ -601,21 +601,31 @@ NOT a bootable MacBinary APPL. For a bootable MacBinary, you must call Elf2Mac D
 
 ```bash
 # Elf2Mac is at: /Retro68-build/toolchain/bin/Elf2Mac  (NOT m68k-apple-macos-ld)
+GCC_LIBDIR=$(find /Retro68-build/toolchain/lib/gcc/m68k-apple-macos -name libgcc.a | head -1 | xargs dirname)
 RETRO68_REAL_LD=/Retro68-build/toolchain/bin/m68k-apple-macos-ld.real \
   /Retro68-build/toolchain/bin/Elf2Mac \
   --mac-single \
   -o hello.bin \
   hello.o \
   -L/Retro68-build/toolchain/m68k-apple-macos/lib \
-  -lretrocrt -lc -lInterface -lgcc -lretrocrt
+  -L"${GCC_LIBDIR}" \
+  --start-group -lretrocrt -lc -lInterface -lgcc --end-group
 ```
 
-**Full library order explained:**
+**Full library set explained:**
 - `-lretrocrt`: CRT startup (`_start`, relocator, `_exit` → `ExitToShell`, malloc)
 - `-lc`: newlib libc (exit, atexit, string functions); references back into retrocrt
 - `-lInterface`: ALL Mac Toolbox A-trap stubs; needed by libretrocrt's syscalls.c
 - `-lgcc`: soft-math helpers (`__mulsi3`, `__udivsi3`); needed by libretrocrt's malloc
-- `-lretrocrt` (again): resolve circular libc ↔ retrocrt deps (libc needs `_exit`/malloc)
+
+**CRITICAL: Use `--start-group`/`--end-group`** (NOT `-lretrocrt` twice). The circular dep chain
+is: `_start` → `exit()` [libc] → `_exit` [syscalls.c.obj from retrocrt] → `FSWRITE/FSREAD`
+[Interface] + `__mulsi3` [libgcc]. Without a group, ld scans archives left-to-right only once;
+`syscalls.c.obj` is extracted during a second retrocrt pass, AFTER Interface and libgcc have
+already been processed. The `--start-group`/`--end-group` pair causes ld to rescan all archives
+in the group repeatedly until no new symbols are resolved, correctly handling this late extraction.
+Elf2Mac passes all unrecognized flags through to the real ld, so `--start-group`/`--end-group`
+reach `m68k-apple-macos-ld.real` without any special handling needed.
 
 **`--mac-single` vs `--mac-flat`:**
 - `--mac-single`: produces a complete MacBinary APPL (CODE 0 + CODE 1 resources). No SIZE resource.
@@ -629,9 +639,10 @@ PCC-compiled code itself doesn't need them, but Retro68's CRT does.
 It lives in GCC's private directory: `lib/gcc/m68k-apple-macos/<version>/libgcc.a`.
 You must add a second `-L` pointing to that directory, found dynamically with `find`.
 
-**`-lInterface` IS required**: `libretrocrt.a(syscalls.c.obj)` calls Mac File Manager and volume
-traps (`FSWRITE`, `FSREAD`, `FSCLOSE`, `FLUSHVOL`, etc.) that are provided by `libInterface.a`.
-This is Retro68's pre-built stub library for ALL Mac Toolbox calls. It must come after `-lc`.
+**`-lInterface` IS required**: `libretrocrt.a(syscalls.c.obj)` calls Mac File Manager traps
+(`FSWRITE`, `FSREAD`, `FSCLOSE`, `FLUSHVOL`, etc.; uppercase because GCC mangles Pascal calling
+convention names to uppercase in ELF symbol tables). These are provided by `libInterface.a`.
+This is Retro68's pre-built stub library for ALL Mac Toolbox calls.
 For Phase 2 builds with custom stubs (`libtoolbox-stubs.a`): list our stubs before `-lInterface`
 so our 12 functions shadow the Interface versions; Interface still provides everything else.
 
