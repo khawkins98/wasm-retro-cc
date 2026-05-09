@@ -9,13 +9,15 @@
 
 ### Problem
 
-Browser-based classic Mac emulators (e.g. [classic-vibe-mac](https://github.com/khawkins98/classic-vibe-mac)) let users view and edit Mac application source code, but cannot compile C in the browser — the GCC-based Retro68 toolchain is a large native binary. The only current workarounds are:
+Browser-based classic Mac emulators (e.g. [classic-vibe-mac](https://github.com/khawkins98/classic-vibe-mac)) let users view and edit Mac application source code, but cannot complete the development loop: the GCC-based Retro68 toolchain cannot run without a native host, making in-browser compilation impossible.
 
-1. A **dedicated compile server** (Docker + Retro68) — requires maintained backend infrastructure.
-2. **GitHub Actions** triggered by the browser — requires users to configure personal access tokens.
+The only current workarounds are:
+
+1. **Dedicated compile server** (Docker + Retro68) — requires maintained backend infrastructure.
+2. **GitHub Actions** triggered from the browser — requires users to configure personal access tokens.
 3. **Local toolchain** — requires installing Retro68 locally.
 
-None of these allow a zero-config, zero-server, instant "edit → compile → run in emulator" loop.
+None of these support a zero-config, zero-server, instant **edit → compile → run** loop inside the emulator.
 
 ### Goal
 
@@ -70,8 +72,8 @@ User code just calls `NewWindow(...)` like a normal function. The trap dispatch 
 │  retro-cc.wasm  (runs in browser)                   │
 │                                                     │
 │  1. C compiler (PCC m68k backend) → .o file         │
-│  2. m68k linker → raw code segment                  │
-│  3. MacBinary assembler → .bin (both forks)         │
+│  2. m68k linker (GNU ld or lld) → linked ELF        │
+│  3. Elf2Mac converter → MacBinary (.bin)            │
 │                                                     │
 │  In-memory filesystem (Emscripten MEMFS)            │
 │  Input:  user .c / .h files                         │
@@ -123,8 +125,17 @@ Questions to answer:
 2. Does PCC's m68k backend produce correct 68000 output for simple programs?
 3. Can a simple m68k relocatable object be linked against pre-built Retro68 stubs?
 4. What subset of Classic Mac headers can be pre-processed without A-trap syntax?
+5. **Does PCC's output satisfy the Mac Toolbox calling-convention contract?** Our shim headers define `#define pascal` (empty), so PCC generates standard m68k C calls. The Retro68 stubs are compiled with real GCC to handle convention internally. This must be validated — not assumed.
+6. **Can the Retro68 Elf2Mac tool process PCC's linked ELF?** Retro68's linker pipeline (GNU ld + Elf2Mac ELF→Mac converter) must accept PCC-generated object files without modification. This is an explicit Phase 0 gate.
 
-Deliverable: a shell script that compiles `hello.c` to a raw 68k binary using PCC natively (not yet WASM), linked against a pre-compiled Retro68 archive. If this works, Phase 1 is unblocked.
+**Phase 0 exit criteria (all must pass before Phase 1 begins):**
+- [ ] PCC compiles `hello.c` to m68k assembly without errors
+- [ ] Assembly links against Retro68 stubs (`nm` shows no undefined symbols)
+- [ ] `objdump` confirms 68000-only instructions (no 68020+ opcodes)
+- [ ] Retro68 Elf2Mac produces a MacBinary from PCC's linked ELF (via Docker)
+- [ ] The MacBinary boots in the classic-vibe-mac emulator
+
+Deliverable: a shell script (`spike/run-spike.sh`) that compiles `hello.c` through the complete PCC → ELF → MacBinary pipeline, using pre-compiled Retro68 stubs. Failure is a valuable result — it identifies which risk row materialised.
 
 ### Phase 1 — Core WASM module (6–10 weeks)
 
@@ -132,8 +143,9 @@ Deliverable: a shell script that compiles `hello.c` to a raw 68k binary using PC
 - Emscripten MEMFS for source file I/O
 - Pre-processed System 7 headers bundled in MEMFS
 - Pre-compiled Retro68 CRT + libretro68 linked at build time
-- Simple m68k relocatable linker (could start with a minimal linker written in C, compiled alongside PCC)
-- MacBinary output writer (produces `.bin` with both code + resource forks, resource fork can be minimal/empty initially)
+- **m68k linker:** GNU ld (`m68k-linux-gnu-ld`) or lld compiled to WASM — links user `.o` against pre-compiled stubs to produce a linked ELF
+- **Elf2Mac converter:** Retro68's `Elf2Mac/Object.cc` (ELF→Mac binary format) compiled to WASM alongside PCC — this is ~4 C++ files with no `fork()`/`exec()`, gives ABI-compatible MacBinary output for free
+- MacBinary output writer (produces `.bin` with both code + resource forks)
 - JS wrapper API (see below)
 
 ### Phase 2 — Integration + hardening (3–4 weeks)
@@ -207,8 +219,8 @@ Start with Option A, graduate to Option B as the surface area needed grows.
 | PCC compiler (Emscripten) | 1.5–3 MB |
 | Pre-processed headers | 50–200 KB |
 | Pre-compiled Retro68 stubs (libretro68.a, crt0.o) | 100–300 KB |
-| m68k linker | 100–300 KB |
-| MacBinary writer | < 10 KB |
+| m68k linker (GNU ld or lld compiled to WASM) | 200–500 KB |
+| Elf2Mac converter (Object.cc + deps compiled to WASM) | 50–100 KB |
 | **Total** | **~2–4 MB** |
 
 Acceptable: the classic-vibe-mac emulator itself is ~1.7 MB. A 3 MB lazy-loaded WASM module (only fetched when the user clicks Compile) is reasonable.
@@ -217,13 +229,14 @@ Acceptable: the classic-vibe-mac emulator itself is ~1.7 MB. A 3 MB lazy-loaded 
 
 ## Risks
 
-| Risk | Likelihood | Mitigation |
-|---|---|---|
-| PCC's m68k backend has bugs for the code patterns Toolbox uses | Medium | Phase 0 spike tests against known-good Retro68 output |
-| `fork()`/`exec()` in PCC driver blocks Emscripten | Medium | PCC's compiler proper (cc1 equivalent) avoids fork — link directly |
-| Pre-compiled stubs ABI mismatch with PCC output | Medium | Use Retro68 linker script; validate against Retro68 reference output |
-| Bundle > 6 MB after optimisation | Low | PCC is small; fall back to lazy-load with progress indicator |
-| Pre-processed headers miss important Toolbox calls | High (initially) | Ship with explicit "supported calls" list, expand iteratively |
+| Risk | Likelihood | Impact | Mitigation |
+|---|---|---|---|
+| **m68k linker** — producing a correct Mac binary requires Mac-specific section handling (CODE/DATA resources, A5 world, jump tables). Writing a compatible linker from scratch is substantial; using the wrong linker silently produces broken binaries. | **High** | **High** | Use Retro68's existing Elf2Mac converter (Object.cc, ~4 files, no fork/exec) compiled to WASM. Phase 0 validates Elf2Mac accepts PCC's output before Phase 1 investment. |
+| PCC's m68k backend has bugs for the code patterns Toolbox uses | Medium | High | Phase 0 exit criteria require linking and booting — not just compiling |
+| Pascal calling convention mismatch — shim headers define `pascal` as empty, PCC generates standard C calls. If Retro68 stubs expect a different call frame, programs will crash silently. | Medium | High | Explicit Phase 0 exit criterion: boot-test the MacBinary in the emulator |
+| `fork()`/`exec()` in PCC driver blocks Emscripten | Medium | Medium | PCC's compiler proper (`ccom`) avoids fork — link directly, bypass the `pcc` driver |
+| Bundle > 6 MB after optimisation | Low | Low | PCC is small; fall back to lazy-load with progress indicator |
+| Pre-processed headers miss important Toolbox calls | High (initially) | Low | Ship with explicit "supported calls" list, expand iteratively |
 
 ---
 
@@ -244,10 +257,11 @@ When this project reaches Phase 2, the `feat/compile-server` branch in `classic-
 
 ## Open questions
 
-- [ ] Does PCC's m68k backend produce output compatible with Retro68's linker, or will we need a custom linker?
+- [ ] Does PCC's m68k backend produce output Retro68's Elf2Mac accepts without modification? (Phase 0 gate)
+- [ ] Does the MacBinary produced via PCC + Elf2Mac actually boot in classic-vibe-mac? (Phase 0 gate)
 - [ ] What is the minimal set of Toolbox calls needed for a useful playground (target: 80% of what classic-vibe-mac's sample apps use)?
 - [ ] Should the resource fork be minimal/empty (app won't have a custom icon or menu bar) or should we ship a basic Rez pipeline alongside?
-- [ ] Can the pre-compiled Retro68 stubs be extracted from `ghcr.io/autc04/retro68:latest` in CI without building Retro68 from source?
+- [x] Can the pre-compiled Retro68 stubs be extracted from `ghcr.io/autc04/retro68:latest` in CI without building Retro68 from source? → Yes, via `docker run --entrypoint /bin/bash | tar -h`
 
 ---
 
