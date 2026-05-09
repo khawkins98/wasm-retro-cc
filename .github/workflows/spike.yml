@@ -1,4 +1,4 @@
-name: Phase 0 spike — PCC m68k validation
+name: Phase 0/1 spike — PCC m68k pipeline validation
 on:
   push:
     branches: [main]
@@ -67,4 +67,36 @@ jobs:
         with:
           name: phase0-elf
           path: spike/build/hello.elf
+          if-no-files-found: ignore
+
+  phase1:
+    runs-on: ubuntu-latest
+    needs: phase0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install m68k binutils
+        run: sudo apt-get install -y binutils-m68k-linux-gnu
+
+      - name: Extract Retro68 stubs
+        run: bash spike/run-spike.sh setup
+
+      - name: Build PCC (m68k target)
+        run: bash spike/run-spike.sh build-pcc
+
+      - name: Compile hello.c with PCC
+        run: bash spike/run-spike.sh compile
+
+      - name: Phase 1 — Link ELF → MacBinary via Elf2Mac
+        run: bash spike/run-spike.sh link
+
+      - name: Phase 1 — Validate MacBinary format
+        run: bash spike/run-spike.sh verify
+
+      - name: Upload MacBinary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase1-macbinary
+          path: spike/build/hello.bin
           if-no-files-found: ignore
