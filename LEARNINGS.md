@@ -76,9 +76,15 @@ dispatched through the pre-compiled stub).
   The `CLASSIC68K` define that results does NOT appear in the m68k backend source — code
   generation is identical regardless; the define mainly affects the configure-generated
   `config.h` and runtime library selection.
-- **Binary naming:** After `./configure --target=m68k-unknown-apple && make`, the PCC
-  driver binary is at `cc/cc/m68k-unknown-apple-pcc` (or a config.sub-canonicalized
-  variant like `m68k-apple-macos-pcc`). Use `find cc/cc -name '*pcc' -type f` to locate it.
+- **Required configure flags:** `--target=m68k-unknown-apple --disable-nativefp`
+  - `--disable-nativefp` is essential: default (`nativefp=yes`) adds `-DNATIVE_FLOATING_POINT`
+    which hides `union flt` in `mip/manifest.h`, causing `arch/m68k/local.c:ninval()` to fail
+    with "flt defined as wrong kind of tag". Without native FP, the softfloat implementation
+    compiles correctly (safe for m68k cross-compilation; no behaviour difference for integer code).
+  - Note: `local.c:picsymtab()` uses `strlcpy`/`strlcat` without a declaration — these produce
+    warnings on Linux but link correctly on Ubuntu 24.04 (glibc 2.39+).
+- **Binary naming:** After `make -C cc/ccom`, the compiler proper is at
+  `cc/ccom/m68k-unknown-apple-ccom`. Use `find cc/ccom -name '*ccom' -type f` to locate it.
 
 ### GCC (Retro68) — ruled out
 
