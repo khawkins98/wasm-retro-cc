@@ -277,7 +277,10 @@ cmd_verify() {
   #   bytes  1-64  : filename (Pascal string, byte 1 = length)
   #   bytes 65-68  : file type OSType ('APPL' = 0x41 0x50 0x50 0x4C)
   #   bytes 69-72  : creator OSType
-  # We verify the APPL type field and that the file is at least 128 bytes.
+  #   bytes 83-86  : data fork length (big-endian uint32)
+  #   bytes 87-90  : resource fork length (big-endian uint32)
+  # We verify type == APPL, data fork present, and resource fork non-empty
+  # (a real Mac app must have CODE resources in its resource fork).
 
   local FILE_SIZE
   FILE_SIZE=$(wc -c < "${BIN}")
@@ -295,7 +298,22 @@ cmd_verify() {
     exit 1
   fi
 
-  echo "=== MacBinary validation passed (${FILE_SIZE} bytes) ==="
+  # Check resource fork length is non-zero (CODE resources live here).
+  local RSRC_LEN
+  RSRC_LEN=$(python3 -c "
+import struct, sys
+with open('${BIN}', 'rb') as f:
+    f.seek(87)
+    print(struct.unpack('>I', f.read(4))[0])
+")
+  if [ "${RSRC_LEN}" -gt 0 ]; then
+    echo "PASS: Resource fork present (${RSRC_LEN} bytes)"
+  else
+    echo "FAIL: Resource fork is empty — no CODE resources"
+    exit 1
+  fi
+
+  echo "=== MacBinary validation passed (${FILE_SIZE} bytes, rsrc ${RSRC_LEN} bytes) ==="
 }
 
 # ── build-stubs ────────────────────────────────────────────────────────────
@@ -453,7 +471,22 @@ cmd_verify_toolbox() {
     exit 1
   fi
 
-  echo "=== MacBinary validation passed (${FILE_SIZE} bytes) ==="
+  # Check resource fork length is non-zero (CODE resources live here).
+  local RSRC_LEN
+  RSRC_LEN=$(python3 -c "
+import struct, sys
+with open('${BIN}', 'rb') as f:
+    f.seek(87)
+    print(struct.unpack('>I', f.read(4))[0])
+")
+  if [ "${RSRC_LEN}" -gt 0 ]; then
+    echo "PASS: Resource fork present (${RSRC_LEN} bytes)"
+  else
+    echo "FAIL: Resource fork is empty — no CODE resources"
+    exit 1
+  fi
+
+  echo "=== MacBinary validation passed (${FILE_SIZE} bytes, rsrc ${RSRC_LEN} bytes) ==="
 }
 
 # ── compare ───────────────────────────────────────────────────────────────
