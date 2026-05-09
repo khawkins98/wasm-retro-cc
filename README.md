@@ -1,7 +1,24 @@
 # wasm-retro-cc
 
-> **Status: Phase 0 complete — proceeding to Phase 1**
+> **Status: Native spike pipeline complete through Phase 2 (CI green).**
 > A WASM C compiler targeting the classic Macintosh 68k, designed for use in browser-based playground environments.
+
+---
+
+## Current state (May 2026)
+
+What is implemented today:
+
+- ✅ `spike/run-spike.sh` builds PCC, compiles C, links via Retro68 `Elf2Mac`, and validates MacBinary output
+- ✅ CI workflow `.github/workflows/spike.yml` runs **phase0 / phase1 / phase2** and uploads artifacts
+- ✅ `src/stubs/libtoolbox-stubs.s` provides hand-written Toolbox trap bridge stubs (GNU AS MIT syntax)
+- ✅ `src/include/*.h` shim headers cover the current spike program surface
+- ✅ Phase 2 output (`hello_toolbox.bin`) has been structurally validated and round-tripped through classic-vibe-mac's HFS patcher path
+
+What is **not** implemented yet:
+
+- ❌ `retro-cc.wasm` / `retro-cc.js` browser module
+- ❌ In-browser compile API and runtime integration
 
 ---
 
@@ -128,16 +145,17 @@ Questions to answer:
 5. **Does PCC's output satisfy the Mac Toolbox calling-convention contract?** Our shim headers define `#define pascal` (empty), so PCC generates standard m68k C calls. The Retro68 stubs are compiled with real GCC to handle convention internally. This must be validated — not assumed.
 6. **Can the Retro68 Elf2Mac tool process PCC's linked ELF?** Retro68's linker pipeline (GNU ld + Elf2Mac ELF→Mac converter) must accept PCC-generated object files without modification. This is an explicit Phase 0 gate.
 
-**Phase 0 exit criteria and results:**
+**Phase 0/1 spike exit criteria and results (actual):**
 - [x] PCC compiles `hello.c` to m68k assembly without errors ✅
 - [x] Assembly links against Retro68 stubs (`nm` shows no undefined symbols) ✅
 - [ ] PCC output confirmed 68000-only — **not met**: PCC emits 68020+ instructions (`extb.l`, `muls.l`). Accepted: BasiliskII emulates 68020; targets Mac II/SE30/Quadra class.
-- [ ] Retro68 Elf2Mac produces a MacBinary from the linked ELF — deferred to Phase 1
-- [ ] The MacBinary boots in the classic-vibe-mac emulator — deferred to Phase 1
+- [x] Retro68 Elf2Mac produces a MacBinary from the linked ELF ✅
+- [x] MacBinary passes structural and patcher validation (type APPL, non-empty resource fork, HFS round-trip) ✅
+- [ ] Full manual browser boot verification in BasiliskII remains human/manual (not CI-automated)
 
 Deliverable: a shell script (`spike/run-spike.sh`) that compiles `hello.c` through the complete PCC → ELF → MacBinary pipeline, using pre-compiled Retro68 stubs. Failure is a valuable result — it identifies which risk row materialised.
 
-### Phase 1 — Core WASM module (6–10 weeks)
+### Phase 1 — Core WASM module (not started)
 
 - PCC compiled to WASM via Emscripten
 - Emscripten MEMFS for source file I/O
@@ -148,7 +166,7 @@ Deliverable: a shell script (`spike/run-spike.sh`) that compiles `hello.c` throu
 - MacBinary output writer (produces `.bin` with both code + resource forks)
 - JS wrapper API (see below)
 
-### Phase 2 — Integration + hardening (3–4 weeks)
+### Phase 2 — Integration + hardening (not started)
 
 - Structured diagnostic output (file, line, column, severity) — same shape as the `Diagnostic` type in classic-vibe-mac
 - Bundle size optimisation (strip PCC, tree-shake headers)
@@ -251,19 +269,19 @@ const module = await loadModule(`${baseUrl}retro-cc/retro-cc.js`);
 
 The WASM file is fetched at runtime (not bundled into the main JS chunk), so it doesn't affect initial page load. The Compile & Run button is disabled until the module loads.
 
-When this project reaches Phase 2, the `feat/compile-server` branch in `classic-vibe-mac` can be replaced or supplemented: users without a compile server configured get the WASM path instead.
+When this project reaches browser-ready integration, the compile-server path in `classic-vibe-mac` can be replaced or supplemented: users without a compile server configured get the WASM path instead.
 
 ---
 
-## Open questions
+## Open questions (remaining)
 
-- [ ] Does PCC's m68k output pass through Retro68's Elf2Mac without modification? (Phase 1 gate)
-- [ ] Does the resulting MacBinary boot in classic-vibe-mac? (Phase 1 gate)
+- [x] Does PCC's m68k output pass through Retro68's Elf2Mac without modification? → Yes, in the native spike pipeline
+- [ ] Does the resulting MacBinary fully boot in classic-vibe-mac via manual browser verification? (human test step)
 - [ ] What is the minimal set of Toolbox calls needed for a useful playground (target: 80% of what classic-vibe-mac's sample apps use)?
 - [ ] Should the resource fork be minimal/empty or should we ship a basic Rez pipeline alongside?
 - [x] Can Retro68 stubs be extracted from `ghcr.io/autc04/retro68:latest` in CI without building from source? → Yes, via `docker run --entrypoint /bin/bash | tar -h`
 - [x] Does PCC build from source on Ubuntu 24.04 (GCC 13)? → Yes, with three patches. See `LEARNINGS.md` and `spike/run-spike.sh`.
-- [x] Does `libInterface.a` from Retro68 contain high-level Toolbox stubs? → No. Only ~30 uppercase OS-level stubs (GESTALT, DELAY, etc.). Phase 1 must build `libtoolbox-stubs.a` for QuickDraw/Window Manager.
+- [x] Does `libInterface.a` from Retro68 contain high-level Toolbox stubs? → No. Only ~30 uppercase OS-level stubs (GESTALT, DELAY, etc.). `libtoolbox-stubs.a` is required and now implemented for the current spike surface.
 
 ---
 
@@ -271,7 +289,7 @@ When this project reaches Phase 2, the `feat/compile-server` branch in `classic-
 
 - [PCC source](https://github.com/IanHarvey/pcc) — m68k backend in `arch/m68k/`
 - [Retro68](https://github.com/autc04/Retro68) — GCC-based Mac 68k toolchain
-- [wasm-rez](https://github.com/autc04/Retro68) — companion project: Rez resource compiler compiled to WASM (existing proof-of-concept for this architecture)
+- [classic-vibe-mac wasm-rez tool](https://github.com/khawkins98/classic-vibe-mac/tree/main/tools/wasm-rez) — companion Rez compiler compiled to WASM (existing proof-of-concept for this architecture)
 - [classic-vibe-mac issue #60](https://github.com/khawkins98/classic-vibe-mac/issues/60) — compile server (interim approach this project supersedes)
 - [classic-vibe-mac issue #57](https://github.com/khawkins98/classic-vibe-mac/issues/57) — original in-browser C compilation tracking issue
 - [Emception](https://github.com/nicowillis/emception) — reference for compiling Clang to WASM (bundle size data)

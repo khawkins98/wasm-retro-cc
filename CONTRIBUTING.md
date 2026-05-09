@@ -1,6 +1,6 @@
 # Contributing to wasm-retro-cc
 
-This is a research-heavy project in early feasibility phase. Before writing any code,
+This is a research-heavy project. Before writing any code,
 read `README.md` (the PRD) and `LEARNINGS.md` (everything we already know).
 Working through unsolved problems twice wastes everyone's time.
 
@@ -8,34 +8,38 @@ Working through unsolved problems twice wastes everyone's time.
 
 ## Project status
 
-We are in **Phase 0 — Feasibility Spike**. The goal is to answer a small set of concrete
-questions before committing to the full implementation. See `README.md` for the phased plan.
+Current state:
 
-The primary output of Phase 0 is: a shell script that compiles `spike/hello.c` to a raw
-68k binary using PCC natively (not yet WASM), linked against pre-compiled Retro68 stubs.
-If that works, Phase 1 (WASM compilation) is unblocked.
+- ✅ Native spike pipeline complete through Phase 2 (`spike/run-spike.sh`)
+- ✅ CI (`.github/workflows/spike.yml`) green for phase0/phase1/phase2
+- ❌ Browser WASM module (`retro-cc.wasm`) not started yet
+
+See `README.md` for the latest phased plan and scope.
 
 ---
 
 ## Prerequisites
 
-### For the feasibility spike (Phase 0)
+### For the implemented spike pipeline
 
 - Docker (to extract Retro68 stubs from the container image)
-- PCC source code (`git clone https://github.com/IanHarvey/pcc`)
-- Emscripten SDK for WASM experiments
+- Python 3 (used by verify scripts in `run-spike.sh`)
 - A basic understanding of m68k assembly (helpful but not required)
 
 ```bash
-# Pull the Retro68 image and extract pre-compiled stubs
-docker pull ghcr.io/autc04/retro68:latest
-docker create --name retro68-tmp ghcr.io/autc04/retro68:latest
-docker cp retro68-tmp:/Retro68-build/toolchain/m68k-apple-macos/lib/. spike/retro68-stubs/
-docker cp retro68-tmp:/Retro68-build/toolchain/m68k-apple-macos/include/. spike/retro68-headers/
-docker rm retro68-tmp
+# Setup + full spike run (native)
+bash spike/run-spike.sh setup
+bash spike/run-spike.sh build-pcc
+bash spike/run-spike.sh compile
+bash spike/run-spike.sh link
+bash spike/run-spike.sh verify
+bash spike/run-spike.sh build-stubs
+bash spike/run-spike.sh compile-toolbox
+bash spike/run-spike.sh link-toolbox
+bash spike/run-spike.sh verify-toolbox
 ```
 
-### For the full WASM build (Phase 1+)
+### For future WASM work (not started)
 
 - [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html)
 - CMake 3.20+
@@ -52,24 +56,20 @@ wasm-retro-cc/
 ├── LEARNINGS.md           ← Technical discoveries — read this second
 ├── CONTRIBUTING.md        ← You are here
 │
-├── spike/                 ← Phase 0 feasibility work
+├── spike/                 ← Native spike pipeline work
 │   ├── hello.c            ← Minimal test program (no A-trap in user code)
-│   ├── retro68-stubs/     ← Extracted from Docker image (gitignored)
-│   ├── retro68-headers/   ← Extracted from Docker image (gitignored)
-│   └── run-spike.sh       ← Automates the Phase 0 test
+│   ├── hello_toolbox.c    ← Toolbox test program
+│   ├── mac.ld             ← Linker script
+│   └── run-spike.sh       ← Automates phase0/phase1/phase2
 │
 ├── src/
-│   ├── compiler/          ← PCC submodule or vendored copy (Phase 1)
-│   ├── linker/            ← m68k linker (Phase 1)
-│   ├── macbinary/         ← MacBinary II writer in C (Phase 1)
 │   ├── include/           ← Shim headers (extern declarations, no A-trap)
 │   │   ├── Types.h
 │   │   ├── Quickdraw.h
 │   │   ├── Windows.h      ← Plain extern decls — no = { 0xAxx } syntax
 │   │   └── ...
-│   └── js/
-│       ├── retro-cc.ts    ← JS/TS API wrapper (same pattern as wasm-rez)
-│       └── retro-cc.test.ts
+│   └── stubs/
+│       └── libtoolbox-stubs.s
 │
 ├── docs/
 │   ├── architecture.md    ← Detailed component diagram
@@ -78,7 +78,7 @@ wasm-retro-cc/
 │
 └── .github/
     ├── extensions/        ← Copilot CLI agent definitions
-    ├── workflows/         ← CI: extract stubs, build WASM, run tests
+    ├── workflows/         ← CI: spike phase0/phase1/phase2
     └── ISSUE_TEMPLATE/
 ```
 
@@ -86,25 +86,29 @@ wasm-retro-cc/
 
 ## Development workflow
 
-### Phase 0 spike
+### Spike pipeline
 
 ```bash
 # 1. Extract Retro68 stubs (one-time setup)
 bash spike/run-spike.sh setup
 
-# 2. Compile the test program natively with PCC
+# 2. Compile and link base hello
 bash spike/run-spike.sh compile
+bash spike/run-spike.sh link
+bash spike/run-spike.sh verify
 
-# 3. Check output against Retro68 reference
-bash spike/run-spike.sh compare
+# 3. Build toolbox stubs and toolbox hello
+bash spike/run-spike.sh build-stubs
+bash spike/run-spike.sh compile-toolbox
+bash spike/run-spike.sh link-toolbox
+bash spike/run-spike.sh verify-toolbox
 ```
 
 ### Writing shim headers
 
 Shim headers live in `src/include/`. They must:
 - Use only standard C syntax (no GCC extensions)
-- Declare Toolbox functions with the correct signature and `pascal` modifier
-  (if PCC supports `pascal`; otherwise use `__attribute__((pascal))` or equivalent)
+- Declare Toolbox functions with correct signatures compatible with the stubs
 - Not include any `= { 0xAxx }` A-trap syntax
 - Include the correct Mac type definitions from `<Types.h>`
 
@@ -113,14 +117,10 @@ noting which functions are included and which were deliberately excluded.
 
 ### Testing
 
-We don't have a test suite yet. For Phase 0, "the test" is: does the spike compile
-`hello.c` and produce a binary that matches Retro68's output closely enough to boot
-in the emulator?
-
-For Phase 1+, tests will be:
-1. Unit: does the compiler accept valid C and reject invalid C?
-2. Integration: does the MacBinary output boot in the classic-vibe-mac emulator?
-3. Regression: does the compiled hello-mac sample app still work after changes?
+Current test strategy:
+1. `spike.yml` CI phases run end-to-end compile/link/verify commands
+2. `verify` / `verify-toolbox` enforce MacBinary APPL + non-empty resource fork
+3. Manual browser boot remains a human validation step (not CI-automated yet)
 
 ---
 
@@ -135,7 +135,7 @@ These are settled. Don't re-open them without a very good reason.
 | Shim headers (Option A before Option B) | Hand-authored extern decls are simpler and faster to ship |
 | Same JS API pattern as wasm-rez | Consistency with classic-vibe-mac; proven to work |
 | No C++ initially | Adds significant complexity; sample apps are all C |
-| 68000 only (no 68020+) | The emulator targets a generic 68k Mac; 68020+ instructions would crash |
+| 68020+ output accepted | PCC emits 68020+ instructions; BasiliskII target class supports this |
 
 ---
 
@@ -143,10 +143,9 @@ These are settled. Don't re-open them without a very good reason.
 
 Document your reasoning when you make these:
 
-- [ ] Which linker to use (GNU ld, ld.lld, or custom)?
-- [ ] Can `pascal` calling convention be ignored for user code, or must PCC support it?
+- [ ] Which linker strategy to use in-browser (reuse Retro68 linker path vs custom)?
+- [ ] Final JS/WASM API shape and packaging target
 - [ ] Empty resource fork vs minimal resource fork (app icon, menu bar)?
-- [ ] npm package name and publishing target?
 
 ---
 
