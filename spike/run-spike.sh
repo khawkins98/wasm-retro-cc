@@ -70,6 +70,12 @@ EOF
   # error ("flt defined as wrong kind of tag") regardless of nativefp.
   sed -i 's/(union flt \*)/(struct flt *)/g' arch/m68k/local.c
 
+  # Patch m68k macdefs.h: softfloat.c requires USE_IEEEFP_32/64/X80 to
+  # define IEEE FP format descriptors.  i386/amd64 define these; m68k
+  # backend never did.  Classic Mac uses IEEE 32/64 for float/double and
+  # SANE 80-bit extended (closest to x80) for long double.
+  printf '\n/* floating point definitions (required by softfloat.c) */\n#define USE_IEEEFP_32\n#define USE_IEEEFP_64\n#define USE_IEEEFP_X80\n' >> arch/m68k/macdefs.h
+
   ./configure --cache-file=config.cache --target=m68k-unknown-apple --disable-nativefp
 
   # Build only cc/ccom (the compiler proper).  The cc/cc driver wrapper
