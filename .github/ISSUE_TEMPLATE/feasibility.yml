@@ -1,0 +1,15 @@
+name: Feasibility question
+description: Unsure whether something is possible with wasm-retro-cc?
+labels: ["question"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: What are you trying to do?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Code snippets, error messages, or research you've already done

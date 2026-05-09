@@ -1,0 +1,56 @@
+name: Phase 0 spike — PCC m68k validation
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'spike/**'
+      - 'src/include/**'
+      - '.github/workflows/spike.yml'
+  workflow_dispatch:
+
+jobs:
+  phase0:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install m68k binutils
+        run: sudo apt-get install -y binutils-m68k-linux-gnu
+
+      - name: Extract Retro68 stubs
+        run: bash spike/run-spike.sh setup
+
+      - name: Build PCC (m68k target)
+        run: bash spike/run-spike.sh build-pcc
+
+      - name: Compile hello.c with PCC
+        run: bash spike/run-spike.sh compile
+
+      - name: Validate — no undefined symbols
+        run: |
+          UNDEF=$(m68k-linux-gnu-nm spike/build/hello.elf | grep " U ")
+          if [ -n "$UNDEF" ]; then
+            echo "FAIL: undefined symbols:"
+            echo "$UNDEF"
+            exit 1
+          fi
+          echo "PASS: zero undefined symbols"
+
+      - name: Validate — no 68020+ instructions
+        run: |
+          BAD=$(m68k-linux-gnu-objdump -d spike/build/hello.elf \
+                | grep -Ei "muls\.l|mulu\.l|divs\.l|divu\.l|bfextu|bfexts" || true)
+          if [ -n "$BAD" ]; then
+            echo "FAIL: 68020+ instructions found:"
+            echo "$BAD"
+            exit 1
+          fi
+          echo "PASS: no 68020+ instructions"
+
+      - name: Upload ELF artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase0-elf
+          path: spike/build/hello.elf
+          if-no-files-found: ignore

@@ -1,0 +1,25 @@
+{
+  "name": "wasm-retro-cc",
+  "version": "0.1.0",
+  "description": "C compiler for classic Macintosh 68k, compiled to WebAssembly",
+  "keywords": ["macintosh", "68k", "wasm", "compiler", "retro"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/khawkins98/wasm-retro-cc"
+  },
+  "type": "module",
+  "main": "dist/retro-cc.js",
+  "files": [
+    "dist/retro-cc.js",
+    "dist/retro-cc.wasm"
+  ],
+  "scripts": {
+    "build": "emcmake cmake -B build -DCMAKE_BUILD_TYPE=Release && emmake cmake --build build",
+    "test": "node test/run.mjs",
+    "clean": "rm -rf build dist"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
