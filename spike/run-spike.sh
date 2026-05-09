@@ -25,16 +25,16 @@ cmd_setup() {
   docker pull "${RETRO68_IMAGE}"
   mkdir -p "${STUBS_DIR}" "${HEADERS_DIR}"
 
-  # Use docker run + tar -h (dereference) rather than docker cp.
-  # docker cp fails on relative symlinks that point outside the copied
-  # directory (e.g. libInterface.a -> ../../multiversal/lib68k/...).
-  # tar -h replaces every symlink with the file it points to.
-  docker run --rm "${RETRO68_IMAGE}" \
-    tar -hcf - -C /Retro68-build/toolchain/m68k-apple-macos lib \
+  # Use --entrypoint /bin/bash to bypass the Retro68 docker-entrypoint.sh,
+  # which prints "Using multiversal interfaces" to stdout and corrupts the
+  # tar stream when piped.  tar -h dereferences symlinks (libInterface.a
+  # is a relative symlink pointing outside the lib/ directory).
+  docker run --rm --entrypoint /bin/bash "${RETRO68_IMAGE}" \
+    -c 'tar -hcf - -C /Retro68-build/toolchain/m68k-apple-macos lib' \
     | tar -xf - --strip-components=1 -C "${STUBS_DIR}"
 
-  docker run --rm "${RETRO68_IMAGE}" \
-    tar -hcf - -C /Retro68-build/toolchain/m68k-apple-macos include \
+  docker run --rm --entrypoint /bin/bash "${RETRO68_IMAGE}" \
+    -c 'tar -hcf - -C /Retro68-build/toolchain/m68k-apple-macos include' \
     | tar -xf - --strip-components=1 -C "${HEADERS_DIR}"
 
   echo "Stubs extracted to: ${STUBS_DIR}"
