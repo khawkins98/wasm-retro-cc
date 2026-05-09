@@ -6,6 +6,7 @@
 /* Zone initialisation */
 extern void InitApplZone(void);
 extern void MaxApplZone(void);
+extern void MoreMasters(void);
 
 /* Heap statistics */
 extern int32_t FreeMem(void);
