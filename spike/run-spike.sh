@@ -216,7 +216,7 @@ cmd_link() {
         -o /work/spike/build/hello.bin \
         /work/spike/build/hello.o \
         -L\"\${LIBDIR}\" \
-        -lretrocrt -lc
+        -lretrocrt -lc -lretrocrt
 
       echo 'Elf2Mac: OK'
     " \
@@ -366,7 +366,7 @@ cmd_link_toolbox() {
         /work/spike/build/hello_toolbox.o \
         /work/spike/build/libtoolbox-stubs.a \
         -L\"\${LIBDIR}\" \
-        -lretrocrt -lc
+        -lretrocrt -lc -lretrocrt
 
       echo 'Elf2Mac (toolbox): OK'
     " \

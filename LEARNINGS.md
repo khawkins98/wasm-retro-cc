@@ -607,8 +607,13 @@ RETRO68_REAL_LD=/Retro68-build/toolchain/bin/m68k-apple-macos-ld.real \
   -o hello.bin \
   hello.o \
   -L/Retro68-build/toolchain/m68k-apple-macos/lib \
-  -lretrocrt -lc
+  -lretrocrt -lc -lretrocrt
 ```
+
+**CRITICAL: Repeat `-lretrocrt` at the end** to resolve circular archive dependencies.
+`libc.a(exit.o)` needs `_exit` from libretrocrt; `libc.a(__atexit.o)` needs `malloc`/`free`.
+Since ld scans archives left-to-right only once, retrocrt must appear after libc too.
+The idiom `-lretrocrt -lc -lretrocrt` (archive listed twice) is the standard fix.
 
 **`--mac-single` vs `--mac-flat`:**
 - `--mac-single`: produces a complete MacBinary APPL (CODE 0 + CODE 1 resources). No SIZE resource.
