@@ -27,7 +27,11 @@ PCC_SRC="${SPIKE_DIR}/pcc-src"      # git clone of PCC goes here
 STUBS_DIR="${SPIKE_DIR}/retro68-stubs"
 HEADERS_DIR="${SPIKE_DIR}/retro68-headers"
 BUILD_DIR="${SPIKE_DIR}/build"
-RETRO68_IMAGE="ghcr.io/autc04/retro68:latest"
+PCC_PIN="05a6d549952fe7a401b30e87b6df907f6c0a4e88"
+# Pinned by digest so Phase 0/1/2 are reproducible against the toolchain layout
+# we fingerprinted. Update with care — `LEARNINGS.md` documents many path
+# discoveries against this image.
+RETRO68_IMAGE="ghcr.io/autc04/retro68@sha256:e8b6cc8ac3c0cf26dcb299d5396cc7055c102b6bc46b67e2df960453af8ae92b"
 
 # ── setup ──────────────────────────────────────────────────────────────────
 cmd_setup() {
@@ -51,8 +55,9 @@ cmd_setup() {
   echo "Headers extracted to: ${HEADERS_DIR}"
 
   if [ ! -d "${PCC_SRC}" ]; then
-    echo "=== Cloning PCC ==="
+    echo "=== Cloning PCC (pinned to ${PCC_PIN}) ==="
     git clone https://github.com/IanHarvey/pcc "${PCC_SRC}"
+    git -C "${PCC_SRC}" checkout "${PCC_PIN}"
   fi
 }
 
@@ -79,16 +84,15 @@ ac_cv_target=m68k-unknown-apple
 ac_cv_target_alias=m68k-unknown-apple
 EOF
 
-  # Patch PCC local.c: it casts to (union flt *) but pass1.h defines
-  # 'struct flt', not 'union flt' — this is a PCC bug causing a compile
-  # error ("flt defined as wrong kind of tag") regardless of nativefp.
-  sed -i 's/(union flt \*)/(struct flt *)/g' arch/m68k/local.c
-
-  # Patch m68k macdefs.h: softfloat.c requires USE_IEEEFP_32/64/X80 to
-  # define IEEE FP format descriptors.  i386/amd64 define these; m68k
-  # backend never did.  Classic Mac uses IEEE 32/64 for float/double and
-  # SANE 80-bit extended (closest to x80) for long double.
-  printf '\n/* floating point definitions (required by softfloat.c) */\n#define USE_IEEEFP_32\n#define USE_IEEEFP_64\n#define USE_IEEEFP_X80\n' >> arch/m68k/macdefs.h
+  # Apply source patches (union flt → struct flt; USE_IEEEFP_*).
+  # See spike/pcc.patch for the full rationale.  --reverse --check first so
+  # re-running setup is idempotent (skips if already applied).
+  if ! git apply --reverse --check "${SPIKE_DIR}/pcc.patch" 2>/dev/null; then
+    git apply "${SPIKE_DIR}/pcc.patch"
+    echo "Applied spike/pcc.patch"
+  else
+    echo "spike/pcc.patch already applied — skipping"
+  fi
 
   ./configure --cache-file=config.cache --target=m68k-unknown-apple --disable-nativefp
 
@@ -424,8 +428,14 @@ cmd_link_toolbox() {
       echo \"Lib dir  : \${LIBDIR}\"
       echo \"GCC lib  : \${GCC_LIBDIR}\"
 
-      # libtoolbox-stubs.a is listed BEFORE -lInterface so our 12 stub functions
-      # shadow Interface's versions; Interface still provides File Manager etc. for the CRT.
+      # libtoolbox-stubs.a is listed BEFORE -lInterface, but it is NOT a shadow:
+      # libInterface.a contains only ~30 uppercase OS-level stubs (GESTALT, DELAY,
+      # FSWRITE, etc.) — it does NOT define InitGraf / InitFonts / InitWindows /
+      # MoveTo / DrawString / etc.  Our libtoolbox-stubs.a is the SOLE provider
+      # for those Toolbox calls.  Interface still resolves the File Manager / OS
+      # traps that libretrocrt's syscalls.c.obj needs.  Listing stubs first is
+      # for ordering hygiene against future Interface contents, not because
+      # there is a current symbol collision.
       # --start-group/--end-group handles circular deps between retrocrt/libc/Interface/libgcc.
       RETRO68_REAL_LD=\"\${REAL_LD}\" \"\${ELF2MAC}\" \
         --mac-single \
