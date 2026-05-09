@@ -47,7 +47,9 @@ extern WindowPtr NewWindow(Rect *boundsRect, ConstStr255Param title,
 The ABI is identical — calling convention is the same (it's a ROM trap either way,
 dispatched through the pre-compiled stub).
 
-**Status:** Strategy confirmed, not yet implemented. Phase 0 validates the ABI match.
+**Status:** Strategy confirmed. Phase 0 spike validates the ABI match.
+
+**Pascal calling convention note:** Our shim headers define `#define pascal` as empty (a no-op macro). This means PCC sees all Toolbox functions as standard C — right-to-left argument push, caller cleans. The Retro68 pre-compiled stubs handle the actual Mac calling convention internally. PCC never needs to understand `pascal` for user code. This must be validated as an explicit Phase 0 exit criterion (not just assumed).
 
 ---
 
@@ -67,6 +69,16 @@ dispatched through the pre-compiled stub).
   GCC emits. Phase 0 must validate this against known-good Retro68 output.
 - **Source:** `arch/m68k/` in the PCC repo. Key files: `code.c` (instruction emission),
   `local.c` (register allocation, ABI), `macdefs.h` (machine constants).
+- **Correct configure target:** `--target=m68k-unknown-apple` (NOT `m68k-unknown-elf`).
+  PCC's `configure.ac` only activates the m68k backend when the OS token is `apple`,
+  mapping to `abi=classic68k`. Any other OS token (elf, linux, netbsd without m68k) either
+  doesn't set `targmach=m68k` or isn't listed, triggering "not (yet) supported" error.
+  The `CLASSIC68K` define that results does NOT appear in the m68k backend source — code
+  generation is identical regardless; the define mainly affects the configure-generated
+  `config.h` and runtime library selection.
+- **Binary naming:** After `./configure --target=m68k-unknown-apple && make`, the PCC
+  driver binary is at `cc/cc/m68k-unknown-apple-pcc` (or a config.sub-canonicalized
+  variant like `m68k-apple-macos-pcc`). Use `find cc/cc -name '*pcc' -type f` to locate it.
 
 ### GCC (Retro68) — ruled out
 
@@ -231,25 +243,70 @@ The linker must:
 3. Output a flat binary (code segment) ready for MacBinary assembly
 
 Options:
-- **Retro68's own linker** (via Emscripten) — the most compatible choice but adds bundle size
-- **GNU ld** (m68k target) — standard but large
+- **Elf2Mac (Retro68) — preferred:** Retro68 ships `Elf2Mac/` — a GNU ld wrapper that
+  generates a Mac-specific linker script and then runs GNU ld, followed by `Object.cc`
+  which converts the linked ELF to Mac binary format (CODE/DATA resources, resource fork).
+  The ELF→Mac conversion code (`Object.cc`, `Section.cc`, `SegmentMap.cc`, `Reloc.cc`,
+  `Symbol.cc`, `Symtab.cc`) is ~5 C++ files with no `fork()`/`exec()`. This is the
+  WASM-compilable piece — it reads a linked ELF and emits MacBinary. The GNU ld step
+  still needs a real linker (compiled separately or as a WASM module).
+  **This is the right approach**: it gives ABI-compatible MacBinary output for free and
+  sidesteps the risk of writing incompatible Mac binary assembly.
+- **GNU ld** (m68k target) — standard, battle-tested, larger bundle
 - **ld.lld** (LLVM) — smaller, WASM-friendly, supports m68k ELF
-- **Custom minimal linker** in C — for Phase 0 spike, a simple relocating linker that
-  handles the specific output of PCC + libretro68.a may be 500–1000 lines
+- **Custom minimal linker** in C — high risk: Mac-specific section handling is non-trivial
 
-Decision deferred to Phase 0. Start with: can GNU ld (m68k) be compiled via Emscripten?
+**Linker risk is HIGH:** Mac binary format requires specific CODE/DATA resource layout,
+A5-world setup, jump tables, and relocation handling that differ from standard ELF.
+Getting this wrong produces silently broken binaries that crash or fail to load.
+**Decision:** Use Elf2Mac's Object.cc (compiled to WASM) for the ELF→Mac step; use
+GNU ld or lld for the linking step. Validate in Phase 0 that Elf2Mac accepts PCC's ELF.
 
 ---
 
 ## Questions still open
 
 - [ ] Does PCC's m68k backend emit 68000-compatible code (no 68020+ instructions)?
-- [ ] Does PCC support the `pascal` calling convention modifier? (may need to add it)
-- [ ] Can we extract `libretro68.a`, `crt0.o` from `ghcr.io/autc04/retro68:latest`
-      without rebuilding the whole toolchain? (likely yes, it's just `docker run` + `docker cp`)
+- [ ] Does PCC support the `pascal` calling convention modifier? (not needed for user code with `#define pascal`, but good to know)
 - [ ] Does Retro68's `crt0.o` have any GCC-specific relocations that another linker can't process?
 - [ ] What is the minimum set of Toolbox functions needed for a "Hello World" windowed app?
       (Target: write the Tier 1 shim headers with exactly those functions.)
 - [ ] Can the resource fork be completely empty and still produce a bootable app?
       (Classic Mac Finder requires 'BNDL' and 'FREF' resources for the icon, but apps can
       run without them — they just show a generic icon.)
+- [ ] Does Elf2Mac's Object.cc accept PCC-linked ELF without modification? (Phase 0 gate)
+- [ ] Does the resulting MacBinary actually boot in classic-vibe-mac? (Phase 0 gate)
+
+---
+
+## Docker: extracting Retro68 stubs (solved, 2025-05)
+
+**What we needed:** Extract `crt0.o`, `libretro68.a`, `libc.a` from
+`ghcr.io/autc04/retro68:latest` to link against in CI without rebuilding Retro68.
+
+**What went wrong (three iterations):**
+
+1. **`docker cp` fails on relative symlinks.** `libInterface.a` in the image's `lib/`
+   directory is a relative symlink pointing to `../../multiversal/lib68k/libInterface.a`,
+   which is outside the copied directory. `docker cp` exits non-zero on this.
+
+2. **`docker run IMAGE tar -hcf -` is intercepted by ENTRYPOINT.** The Retro68 image
+   sets `ENTRYPOINT ["/Retro68-build/bin/docker-entrypoint.sh"]`. Running
+   `docker run retro68 tar -hcf - ...` actually executes
+   `/Retro68-build/bin/docker-entrypoint.sh tar -hcf - ...` — the entrypoint receives
+   `tar` as its `$1` argument, does its initialization, then `exec`s it. BUT the
+   entrypoint prints `"Using multiversal interfaces\n"` to **stdout** before `exec`ing,
+   which corrupts the tar stream piped to the host.
+
+3. **Fix: `--entrypoint /bin/bash`** to bypass the Retro68 entrypoint entirely:
+   ```bash
+   docker run --rm --entrypoint /bin/bash "${RETRO68_IMAGE}" \
+     -c 'tar -hcf - -C /Retro68-build/toolchain/m68k-apple-macos lib' \
+     | tar -xf - --strip-components=1 -C "${STUBS_DIR}"
+   ```
+   `tar -h` dereferences symlinks (replaces each symlink with the file it points to),
+   solving the `libInterface.a` problem. `--entrypoint /bin/bash` bypasses the
+   initialization banner. Both are required.
+
+**Toolchain path inside the image:** `/Retro68-build/toolchain/m68k-apple-macos/`
+(lib/ and include/ subdirectories).
