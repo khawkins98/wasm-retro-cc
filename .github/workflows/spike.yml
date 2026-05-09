@@ -1,16 +1,16 @@
-name: Phase 0/1 spike — PCC m68k pipeline validation
+name: Phase 0/1/2 spike — PCC m68k pipeline validation
 on:
   push:
     branches: [main]
     paths:
       - 'spike/**'
-      - 'src/include/**'
+      - 'src/**'
       - '.github/workflows/spike.yml'
   pull_request:
     branches: [main]
     paths:
       - 'spike/**'
-      - 'src/include/**'
+      - 'src/**'
       - '.github/workflows/spike.yml'
   workflow_dispatch:
 
@@ -99,4 +99,46 @@ jobs:
         with:
           name: phase1-macbinary
           path: spike/build/hello.bin
+          if-no-files-found: ignore
+
+  phase2:
+    runs-on: ubuntu-latest
+    needs: phase1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install m68k binutils
+        run: sudo apt-get install -y binutils-m68k-linux-gnu
+
+      - name: Extract Retro68 stubs
+        run: bash spike/run-spike.sh setup
+
+      - name: Build PCC (m68k target)
+        run: bash spike/run-spike.sh build-pcc
+
+      - name: Phase 2 — Assemble libtoolbox-stubs.a
+        run: bash spike/run-spike.sh build-stubs
+
+      - name: Phase 2 — Compile hello_toolbox.c with PCC
+        run: bash spike/run-spike.sh compile-toolbox
+
+      - name: Phase 2 — Validate toolbox object (Toolbox refs should be undefined)
+        run: |
+          echo "=== Undefined symbols in hello_toolbox.o (should be Toolbox stubs) ==="
+          m68k-linux-gnu-nm spike/build/hello_toolbox.o | grep " U " || echo "(none)"
+          echo "=== Defined symbols ==="
+          m68k-linux-gnu-nm spike/build/hello_toolbox.o | grep " T " || echo "(none)"
+
+      - name: Phase 2 — Link toolbox ELF → MacBinary via Elf2Mac
+        run: bash spike/run-spike.sh link-toolbox
+
+      - name: Phase 2 — Validate toolbox MacBinary format
+        run: bash spike/run-spike.sh verify-toolbox
+
+      - name: Upload toolbox MacBinary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase2-macbinary-toolbox
+          path: spike/build/hello_toolbox.bin
           if-no-files-found: ignore
