@@ -24,7 +24,7 @@ Replace the A-trap headers with plain `extern` declarations PCC can parse.**
 
 > **Phase 0 finding:** `libInterface.a` from Retro68 contains only ~30 uppercase
 > OS-level stubs (GESTALT, DELAY, etc.). It does **not** contain QuickDraw, Window
-> Manager, Event Manager, or other high-level Toolbox functions. Phase 1 must build
+> Manager, Event Manager, or other high-level Toolbox functions. We therefore build
 > `libtoolbox-stubs.a` — hand-assembled stubs that accept C-cdecl calls and execute
 > the appropriate A-trap.
 
@@ -39,7 +39,7 @@ extern WindowPtr NewWindow(void *wStorage, const Rect *boundsRect,
 When PCC compiles user code:
 1. It includes our shim headers (plain C90 `extern` declarations)
 2. It generates a call to `_NewWindow` (undefined at this point)
-3. The linker links against `libtoolbox-stubs.a` (Phase 1 deliverable)
+3. The linker links against `libtoolbox-stubs.a`
 4. `libtoolbox-stubs.a` contains the hand-assembled stub: accept C-cdecl args, execute `dc.w 0xA913`
 5. All undefined symbols are resolved
 
@@ -62,7 +62,7 @@ Our shim headers use `#define pascal` (from `Types.h`) to make `pascal` a no-op.
 This means PCC will call these functions with C convention (right-to-left push,
 caller cleanup).
 
-**This is intentional.** The `libtoolbox-stubs.a` stubs (Phase 1 deliverable) accept
+**This is intentional.** The `libtoolbox-stubs.a` stubs accept
 C-convention calls and execute the proper Toolbox A-trap. Each stub must be written
 to accept arguments in right-to-left (C cdecl) order and invoke the trap directly
 without re-pushing arguments (the Mac ROM handles the call internally).
@@ -77,9 +77,11 @@ m68k-linux-gnu-objdump -d src/stubs/libtoolbox-stubs.a | grep -A 20 "_NewWindow"
 
 | Function | Issue | Workaround |
 |----------|-------|------------|
-| (none yet) | | |
+| `MoveTo` | Toolbox trap expects `v`/`h` packed in D0 in Pascal order | Stub swaps words using `%d1` temp before trap |
+| Memory-to-memory stack swaps | `m68k-linux-gnu-as` may reject memory-to-memory forms in MIT mode | Use register intermediates (`%d0`/`%d1`) |
+| Assembly syntax | Ubuntu `m68k-linux-gnu-as` defaults to MIT syntax, not Motorola | Use `%d0`, `%a0@`, `%sp@(4)`, `movl`/`movw`, etc. |
 
-Add to this table as you discover mismatches during Phase 0.
+Add to this table as additional trap bridges are implemented.
 
 ## QuickDraw globals ABI note
 
@@ -101,7 +103,7 @@ typedef struct QDGlobals {
 } QDGlobals;
 ```
 
-This offset comment is part of the ABI contract we are validating in Phase 0.
+This offset comment is part of the ABI contract validated by the current spike.
 Also note that `InitDialogs(0L)` is valid C90/C99: the integer constant zero
 converts to a null `ResumeProcPtr`.
 
@@ -135,7 +137,7 @@ Tier 2: `InitMenus()`, `TEInit()`, and `InitDialogs(0L)`.
 
 1. Look up the function in *Inside Macintosh* (Vol 1–5) for the authoritative
    parameter list and types
-2. Verify the symbol will be provided by `libtoolbox-stubs.a` (Phase 1: check the stub archive):
+2. Verify the symbol will be provided by `libtoolbox-stubs.a`:
    ```bash
    nm src/stubs/libtoolbox-stubs.a | grep FunctionName
    ```

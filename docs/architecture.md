@@ -2,8 +2,11 @@
 
 ## Overview
 
-wasm-retro-cc compiles user-written C code for the classic Macintosh 68k platform, entirely
-in the browser — no server required.
+This document covers both:
+1. the **implemented native spike pipeline** (current), and
+2. the **planned browser WASM pipeline** (target).
+
+Current implementation is CI-driven and native-hosted (`spike/run-spike.sh`), not yet browser WASM.
 
 ```
 ┌────────────────────────────────────────────────────────┐
@@ -28,25 +31,25 @@ in the browser — no server required.
 
 ## Components
 
-### PCC (the compiler, compiled to WASM)
+### PCC (current: native spike; target: compiled to WASM)
 
 **Source:** https://github.com/IanHarvey/pcc  
 **Why PCC:** ~130K LOC, has an existing `arch/m68k/` backend, C90 compliant output.
 LLVM was ruled out (12–16 MB gzipped). GCC/Retro68 was ruled out (80–150 MB).
 
-**What PCC does NOT handle:**
+**What PCC does NOT handle directly:**
 - The Retro68 driver (`cc.c`) — uses `fork()`/`execv()`, incompatible with Emscripten
-- Assembler — we use the pre-compiled `.o` stubs from Retro68 instead
-- Linker — we use a WASM-compiled `ld` (from GNU binutils, minimal build)
+- Assembler syntax in SDK headers — handled via shim headers + hand-written stubs
+- Final Mac app packaging — handled via Retro68 `Elf2Mac`
 
-**Compilation pipeline inside WASM:**
+**Compilation pipeline currently implemented (native spike):**
 
 ```
 source.c
-  └─▶ [PCC frontend + m68k codegen] → assembly text (MEMFS)
-        └─▶ [GNU as -m68020] → .o file (MEMFS)
-              └─▶ [GNU ld + libretrocrt.a + libtoolbox-stubs.a + libc.a] → ELF binary (MEMFS)
-                    └─▶ [Elf2Mac / MacBinary wrapper] → .bin blob → returned to browser
+  └─▶ [PCC ccom] → .s
+        └─▶ [m68k-linux-gnu-as] → .o
+              └─▶ [Retro68 ld wrapper via Elf2Mac] + archives → ELF/MacBinary
+                    └─▶ [verify scripts] → validated .bin artifact
 ```
 
 > **Note (Phase 0 finding):** PCC's m68k backend emits 68020+ instructions (`extb.l`,
@@ -68,10 +71,10 @@ Extracted from `ghcr.io/autc04/retro68:latest` in CI. Key libraries:
 - **`libretrocrt.a`** — startup (`_start`), relocator, `malloc`, QuickDraw globals
 - **`libc.a`** — standard C library
 - **`libInterface.a`** — ~30 uppercase OS-level stubs only (GESTALT, DELAY, etc.)
-- **`libtoolbox-stubs.a`** — Phase 1 deliverable: hand-assembled stubs for QuickDraw,
-  Window Manager, Event Manager, etc. (libInterface.a does NOT include these)
+- **`libtoolbox-stubs.a`** — hand-assembled stubs for QuickDraw,
+  Window Manager, Event Manager, etc. (libInterface.a does NOT include these). Implemented in `src/stubs/libtoolbox-stubs.s`.
 
-The stubs are embedded in the WASM bundle via Emscripten's `--preload-file`.
+In the current spike, stubs are assembled in CI/local spike runs and linked natively.
 
 > **Important:** `libInterface.a` symlinks to Retro68's multiversal/lib68k tree. Use
 > `tar -h` when extracting to dereference the symlink.
@@ -85,13 +88,13 @@ Format reference: see `LEARNINGS.md` → MacBinary II Format section.
 
 ## Build phases
 
-| Phase | Goal | Status |
+| Stage | Goal | Status |
 |-------|------|--------|
-| 0 | Validate PCC m68k backend — build from source, compile hello.c, link, zero undefined symbols | **Complete** (CI run 13) |
-| 1 | WASM build: PCC + linker + Elf2Mac + libtoolbox-stubs + full Toolbox hello world | In progress |
-| 2 | WASM build: full browser pipeline, npm package | Not started |
-| 3 | Browser integration with classic-vibe-mac playground | Not started |
-| 4 | npm package release as `wasm-retro-cc` | Not started |
+| Spike phase0 | PCC build + compile + ELF validation | **Complete** |
+| Spike phase1 | ELF → MacBinary via Elf2Mac + header checks | **Complete** |
+| Spike phase2 | Toolbox stubs + toolbox hello MacBinary + validation | **Complete** |
+| WASM phase1 | Build `retro-cc.wasm` + JS API | Not started |
+| WASM phase2 | Browser integration + packaging | Not started |
 
 ## File layout
 
@@ -99,11 +102,12 @@ Format reference: see `LEARNINGS.md` → MacBinary II Format section.
 wasm-retro-cc/
 ├── src/
 │   ├── include/        Shim headers (Tier 1 + Tier 2 Mac Toolbox APIs)
-│   ├── stubs/          Pre-compiled .a files from Retro68 (libretrocrt.a, libc.a, libInterface.a)
-│   └── main.c          WASM entry point — JS-callable compile() function (Phase 1)
+│   └── stubs/          Hand-written toolbox bridge stubs (`libtoolbox-stubs.s`)
 ├── spike/
-│   ├── hello.c         Phase 0 test program
-│   └── run-spike.sh    Phase 0 automation
+│   ├── hello.c         Basic spike test program
+│   ├── hello_toolbox.c Toolbox spike test program
+│   ├── mac.ld          Linker script used by spike
+│   └── run-spike.sh    Phase 0/1/2 automation
 ├── docs/
 │   ├── architecture.md (this file)
 │   ├── abi.md          m68k calling convention reference
@@ -117,7 +121,7 @@ wasm-retro-cc/
 └── README.md           PRD / project overview
 ```
 
-## JS API (planned)
+## JS API (planned, not implemented)
 
 ```ts
 import createRetroCC from "./retro-cc.js";
