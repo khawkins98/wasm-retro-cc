@@ -625,6 +625,9 @@ RETRO68_REAL_LD=/Retro68-build/toolchain/bin/m68k-apple-macos-ld.real \
 **`-lgcc` IS required** even when using PCC: `libretrocrt.a` was compiled by GCC targeting 68000,
 so it emits calls to soft-math helpers (`__mulsi3`, `__udivsi3`). These live in `libgcc.a`.
 PCC-compiled code itself doesn't need them, but Retro68's CRT does.
+**IMPORTANT:** `libgcc.a` is NOT in the standard lib dir (`m68k-apple-macos/lib/`).
+It lives in GCC's private directory: `lib/gcc/m68k-apple-macos/<version>/libgcc.a`.
+You must add a second `-L` pointing to that directory, found dynamically with `find`.
 
 **`-lInterface` IS required**: `libretrocrt.a(syscalls.c.obj)` calls Mac File Manager and volume
 traps (`FSWRITE`, `FSREAD`, `FSCLOSE`, `FLUSHVOL`, etc.) that are provided by `libInterface.a`.

@@ -207,21 +207,35 @@ cmd_link() {
       test -x \"\${REAL_LD}\"  || { echo \"FAIL: real ld not found at \${REAL_LD}\"; exit 1; }
       test -d \"\${LIBDIR}\"   || { echo \"FAIL: lib dir not found at \${LIBDIR}\"; exit 1; }
 
+      # libgcc.a lives in GCC's private directory (lib/gcc/<target>/<ver>/), not LIBDIR.
+      # Find it dynamically to avoid hardcoding the GCC version number.
+      TOOLCHAIN_ROOT=\$(dirname \"\${BINDIR}\")
+      GCC_LIBDIR=\$(find \"\${TOOLCHAIN_ROOT}/lib/gcc/m68k-apple-macos\" \
+                    -name 'libgcc.a' -type f 2>/dev/null | head -1 | xargs dirname 2>/dev/null || true)
+      if [ -z \"\${GCC_LIBDIR}\" ]; then
+        GCC_LIBDIR=\$(find /usr/local/lib/gcc/m68k-apple-macos \
+                      -name 'libgcc.a' -type f 2>/dev/null | head -1 | xargs dirname 2>/dev/null || true)
+      fi
+      test -n \"\${GCC_LIBDIR}\" || { echo \"FAIL: libgcc.a not found\"; exit 1; }
+
       echo \"Elf2Mac  : \${ELF2MAC}\"
       echo \"Real ld  : \${REAL_LD}\"
       echo \"Lib dir  : \${LIBDIR}\"
+      echo \"GCC lib  : \${GCC_LIBDIR}\"
 
       # Library order for circular deps:
       #   libretrocrt: CRT startup; its malloc.c needs __mulsi3 (libgcc) and memcpy (libc);
       #                its syscalls.c needs Mac File Manager traps (libInterface).
-      #   libgcc:      soft-math helpers (__mulsi3, __udivsi3) from Retro68's GCC-compiled libs.
+      #   libgcc:      soft-math helpers (__mulsi3, __udivsi3) — compiled by GCC for 68000.
+      #                Lives in GCC's private lib/gcc/<target>/<ver>/ directory, not LIBDIR.
       #   libInterface: ALL Mac Toolbox A-trap stubs; required by libretrocrt syscalls.
-      #   Repeat -lretrocrt after -lc to resolve circular libc ↔ retrocrt deps.
+      #   Repeat -lretrocrt after -lc/-lgcc to resolve circular libc ↔ retrocrt deps.
       RETRO68_REAL_LD=\"\${REAL_LD}\" \"\${ELF2MAC}\" \
         --mac-single \
         -o /work/spike/build/hello.bin \
         /work/spike/build/hello.o \
         -L\"\${LIBDIR}\" \
+        -L\"\${GCC_LIBDIR}\" \
         -lretrocrt -lc -lInterface -lgcc -lretrocrt
 
       echo 'Elf2Mac: OK'
@@ -362,9 +376,19 @@ cmd_link_toolbox() {
       test -x \"\${REAL_LD}\"  || { echo \"FAIL: real ld not found at \${REAL_LD}\"; exit 1; }
       test -d \"\${LIBDIR}\"   || { echo \"FAIL: lib dir not found at \${LIBDIR}\"; exit 1; }
 
+      TOOLCHAIN_ROOT=\$(dirname \"\${BINDIR}\")
+      GCC_LIBDIR=\$(find \"\${TOOLCHAIN_ROOT}/lib/gcc/m68k-apple-macos\" \
+                    -name 'libgcc.a' -type f 2>/dev/null | head -1 | xargs dirname 2>/dev/null || true)
+      if [ -z \"\${GCC_LIBDIR}\" ]; then
+        GCC_LIBDIR=\$(find /usr/local/lib/gcc/m68k-apple-macos \
+                      -name 'libgcc.a' -type f 2>/dev/null | head -1 | xargs dirname 2>/dev/null || true)
+      fi
+      test -n \"\${GCC_LIBDIR}\" || { echo \"FAIL: libgcc.a not found\"; exit 1; }
+
       echo \"Elf2Mac  : \${ELF2MAC}\"
       echo \"Real ld  : \${REAL_LD}\"
       echo \"Lib dir  : \${LIBDIR}\"
+      echo \"GCC lib  : \${GCC_LIBDIR}\"
 
       RETRO68_REAL_LD=\"\${REAL_LD}\" \"\${ELF2MAC}\" \
         --mac-single \
@@ -372,6 +396,7 @@ cmd_link_toolbox() {
         /work/spike/build/hello_toolbox.o \
         /work/spike/build/libtoolbox-stubs.a \
         -L\"\${LIBDIR}\" \
+        -L\"\${GCC_LIBDIR}\" \
         -lretrocrt -lc -lInterface -lgcc -lretrocrt
 
       echo 'Elf2Mac (toolbox): OK'
