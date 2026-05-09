@@ -50,10 +50,23 @@ cmd_setup() {
 cmd_build_pcc() {
   echo "=== Building PCC for native host (to test m68k codegen) ==="
   pushd "${PCC_SRC}" > /dev/null
-  # --target=m68k-unknown-apple is required: PCC's configure.ac maps the
-  # 'apple' OS token to 'abi=classic68k' which activates the m68k backend.
-  # 'm68k-unknown-elf' is not in PCC's supported target list.
-  ./configure --target=m68k-unknown-apple
+
+  # PCC's configure.ac maps target_os=apple → abi=classic68k → m68k backend.
+  # However, PCC's bundled config.sub (2015) doesn't recognise 'apple' as a
+  # valid OS token and aborts before configure.ac even runs.
+  # Fix: pre-populate config.cache so AC_CANONICAL_TARGET uses cached values
+  # and never calls config.sub for the target.
+  BUILD_TRIPLE=$(gcc -dumpmachine 2>/dev/null || echo "x86_64-unknown-linux-gnu")
+  cat > config.cache << EOF
+ac_cv_build=${BUILD_TRIPLE}
+ac_cv_build_alias=${BUILD_TRIPLE}
+ac_cv_host=${BUILD_TRIPLE}
+ac_cv_host_alias=${BUILD_TRIPLE}
+ac_cv_target=m68k-unknown-apple
+ac_cv_target_alias=m68k-unknown-apple
+EOF
+
+  ./configure --cache-file=config.cache --target=m68k-unknown-apple
   make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
   popd > /dev/null
   echo "=== PCC built ==="
