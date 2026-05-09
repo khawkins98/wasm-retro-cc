@@ -23,11 +23,20 @@ RETRO68_IMAGE="ghcr.io/autc04/retro68:latest"
 cmd_setup() {
   echo "=== Extracting Retro68 stubs from Docker image ==="
   docker pull "${RETRO68_IMAGE}"
-  CID=$(docker create "${RETRO68_IMAGE}")
   mkdir -p "${STUBS_DIR}" "${HEADERS_DIR}"
-  docker cp "${CID}:/Retro68-build/toolchain/m68k-apple-macos/lib/." "${STUBS_DIR}/"
-  docker cp "${CID}:/Retro68-build/toolchain/m68k-apple-macos/include/." "${HEADERS_DIR}/"
-  docker rm "${CID}"
+
+  # Use docker run + tar -h (dereference) rather than docker cp.
+  # docker cp fails on relative symlinks that point outside the copied
+  # directory (e.g. libInterface.a -> ../../multiversal/lib68k/...).
+  # tar -h replaces every symlink with the file it points to.
+  docker run --rm "${RETRO68_IMAGE}" \
+    tar -hcf - -C /Retro68-build/toolchain/m68k-apple-macos lib \
+    | tar -xf - --strip-components=1 -C "${STUBS_DIR}"
+
+  docker run --rm "${RETRO68_IMAGE}" \
+    tar -hcf - -C /Retro68-build/toolchain/m68k-apple-macos include \
+    | tar -xf - --strip-components=1 -C "${HEADERS_DIR}"
+
   echo "Stubs extracted to: ${STUBS_DIR}"
   echo "Headers extracted to: ${HEADERS_DIR}"
 
