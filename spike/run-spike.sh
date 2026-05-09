@@ -65,6 +65,11 @@ ac_cv_target=m68k-unknown-apple
 ac_cv_target_alias=m68k-unknown-apple
 EOF
 
+  # Patch PCC local.c: it casts to (union flt *) but pass1.h defines
+  # 'struct flt', not 'union flt' — this is a PCC bug causing a compile
+  # error ("flt defined as wrong kind of tag") regardless of nativefp.
+  sed -i 's/(union flt \*)/(struct flt *)/g' arch/m68k/local.c
+
   ./configure --cache-file=config.cache --target=m68k-unknown-apple --disable-nativefp
 
   # Build only cc/ccom (the compiler proper).  The cc/cc driver wrapper
@@ -106,20 +111,26 @@ cmd_compile() {
   echo "--- Assembly output (first 60 lines) ---"
   head -60 "${BUILD_DIR}/hello.s"
 
-  # Assemble
-  m68k-linux-gnu-as -m68000 -o "${BUILD_DIR}/hello.o" "${BUILD_DIR}/hello.s" \
+  # Step 3: assemble the PCC output.
+  # Use -m68020 because PCC emits 68020+ instructions (extb.l, muls.l, etc.).
+  m68k-linux-gnu-as -m68020 -o "${BUILD_DIR}/hello.o" "${BUILD_DIR}/hello.s" \
     && echo "Assembly: OK" \
     || { echo "Assembly: FAILED (is m68k-linux-gnu-as installed?)"; exit 1; }
 
-  # Link against pre-compiled Retro68 stubs
-  # NOTE: This is the critical test — do the symbol names match?
+  # Step 4: assemble the minimal Phase 0 startup stub.
+  m68k-linux-gnu-as -m68020 -o "${BUILD_DIR}/crt0_minimal.o" "${SPIKE_DIR}/crt0_minimal.s" \
+    && echo "crt0 assembly: OK" \
+    || { echo "crt0 assembly: FAILED"; exit 1; }
+
+  # Step 5: link.
+  # Phase 0 uses crt0_minimal.s (provides _start) instead of libretrocrt.a
+  # to avoid undefined linker symbols from the full Retro68 CRT.
+  # Phase 1 will link with libretrocrt.a + libc.a + libInterface.a.
   m68k-linux-gnu-ld \
     -m m68kelf \
     -T "${SPIKE_DIR}/mac.ld" \
-    "${STUBS_DIR}/crt0.o" \
+    "${BUILD_DIR}/crt0_minimal.o" \
     "${BUILD_DIR}/hello.o" \
-    "${STUBS_DIR}/libretro68.a" \
-    "${STUBS_DIR}/libc.a" \
     -o "${BUILD_DIR}/hello.elf" \
     && echo "Linking: OK" \
     || { echo "Linking: FAILED — see symbol errors above"; exit 1; }
