@@ -417,14 +417,21 @@ In Retro68, those Toolbox functions are emitted as inline A-trap instructions by
 compiler when using Retro68's own `ONEWORDINLINE(0xTRAP)` header macros.
 
 **Implication for wasm-retro-cc:** Our shim headers declare these as `extern C` functions.
-We need a `libtoolbox-stubs.a` providing each function as a small assembly stub:
+We need a `libtoolbox-stubs.a` providing each function as a small assembly stub.
+
+**IMPORTANT (corrected 2025-05):** InitGraf is a **stack-based Pascal** trap (NOT register-based).
+The ROM reads the argument from the stack and cleans it itself (callee-clean Pascal convention).
+A correct stub must bridge C cdecl (caller-clean) to Pascal (callee-clean) to avoid double-clean:
 ```asm
 .globl InitGraf
 InitGraf:
-    movea.l 4(sp), a0    /* GrafPtr argument → A0 */
-    .word 0xA86E          /* InitGraf A-trap */
-    rts
+    /* C cdecl: SP → [ret_to_PCC] [thePort (4B)] */
+    move.l (sp)+, a0       /* pop ret addr; SP → [thePort] */
+    .word 0xA86E            /* ROM reads thePort, cleans 4 bytes from stack */
+    subq.l #4, sp           /* restore 4 bytes so PCC's addq.l #4,sp balances */
+    jmp (a0)
 ```
+See `src/stubs/libtoolbox-stubs.s` for all 12 trap stubs.
 This stub library is a Phase 1 deliverable, assembled once with `m68k-linux-gnu-as` and
 bundled with the WASM module.
 
@@ -586,6 +593,35 @@ All Toolbox calls in Retro68-compiled code are either:
 **Key insight:** When we use PCC + our shim stubs, the stubs handle the A-trap dispatch.
 PCC never needs to generate A-trap opcodes — it just calls the stubs normally.
 
+### CRITICAL: How to invoke Elf2Mac correctly (researched 2025-05)
+
+**`m68k-apple-macos-gcc` has `--mac-flat` baked into its GCC specs at toolchain build time.**
+Calling `m68k-apple-macos-gcc` with .o files produces a flat `.code.bin` code resource,
+NOT a bootable MacBinary APPL. For a bootable MacBinary, you must call Elf2Mac DIRECTLY:
+
+```bash
+# Elf2Mac is at: /Retro68-build/toolchain/bin/Elf2Mac  (NOT m68k-apple-macos-ld)
+RETRO68_REAL_LD=/Retro68-build/toolchain/bin/m68k-apple-macos-ld.real \
+  /Retro68-build/toolchain/bin/Elf2Mac \
+  --mac-single \
+  -o hello.bin \
+  hello.o \
+  -L/Retro68-build/toolchain/m68k-apple-macos/lib \
+  -lretrocrt -lc
+```
+
+**`--mac-single` vs `--mac-flat`:**
+- `--mac-single`: produces a complete MacBinary APPL (CODE 0 + CODE 1 resources). No SIZE resource.
+- `--mac-flat`:   produces a flat binary code resource (not bootable as an app).
+- `m68k-apple-macos-gcc` forces `--mac-flat` in its specs — never use it for building an app binary.
+
+**`-lgcc` is NOT needed** when using PCC: PCC emits native 68020 instructions (`muls.l`, `divu.l`)
+rather than calls to GCC soft-math helpers (`__mulsi3`, etc.). Omit `-lgcc` unless PCC-compiled
+code unexpectedly references these symbols.
+
+**Elf2Mac is a linker wrapper, not a converter:** It generates its own linker script and calls
+the real ld. You CANNOT feed it a pre-linked ELF. Feed it object files + library flags.
+
 ---
 
 ## Questions still open
@@ -601,10 +637,49 @@ PCC never needs to generate A-trap opcodes — it just calls the stubs normally.
 - [x] Does PCC `ccom` compile our preprocessed hello.i without crashing? **YES** — Phase 0 CI passing as of run 13.
 - [x] Does PCC build on Ubuntu 24.04 with GCC 13? **YES** with three patches: `union flt → struct flt`,
       `USE_IEEEFP_32/64/X80` in m68k macdefs.h, and `-fcommon` in CFLAGS (all applied in `run-spike.sh`).
-- [ ] Does Elf2Mac's Object.cc accept PCC-linked ELF without modification? (Phase 1 gate)
+- [x] What are the exact calling conventions for Toolbox A-traps? **RESEARCHED (2025-05)** — see
+      complete trap table below. Key: most are stack-based Pascal (callee-clean), FlushEvents is
+      register-based (D0-packed), NewWindow is complex (8 args, Phase 2 TODO).
+- [ ] Does Elf2Mac's --mac-single produce MacBinary that boots in classic-vibe-mac? (Phase 1 gate)
 - [ ] Does the resulting MacBinary actually boot in classic-vibe-mac? (Phase 1 gate)
 - [ ] Does classic-vibe-mac (BasiliskII) emulate 68000 or 68020+? (affects 68020-instruction concern)
-- [ ] What are the exact calling conventions (reg vs stack) for each Toolbox A-trap? (Phase 1 stub work)
+
+---
+
+## Mac Toolbox A-trap calling conventions (researched 2025-05)
+
+**Stack-based Pascal calling convention (majority of traps):**
+- Args pushed LEFT-TO-RIGHT by caller (first arg = deepest, last arg at top)
+- ROM/callee cleans the stack after returning
+- C cdecl pushes right-to-left; ROM expects left-to-right → bridge stubs required
+- After ROM returns, SP is back at pre-push value; PCC's caller also adds back → DOUBLE CLEAN
+- Fix: pop ret addr, fire trap, push N bytes back as padding, jmp to ret addr
+
+| Function | Trap | Convention | Notes |
+|---|---|---|---|
+| `InitGraf` | `0xA86E` | Stack Pascal | SP+0 = GrafPtr* (4B); corrected — NOT register-based |
+| `InitFonts` | `0xA8FE` | Stack Pascal | No args; trivial rts stub |
+| `InitWindows` | `0xA912` | Stack Pascal | No args; trivial rts stub |
+| `InitMenus` | `0xA930` | Stack Pascal | No args; trivial rts stub |
+| `TEInit` | `0xA9CC` | Stack Pascal | No args; trivial rts stub |
+| `InitDialogs` | `0xA97B` | Stack Pascal | SP+0 = ProcPtr (4B) |
+| `SetPort` | `0xA873` | Stack Pascal | SP+0 = GrafPtr (4B) |
+| `DrawString` | `0xA884` | Stack Pascal | SP+0 = Pascal str ptr (4B) |
+| `MoveTo` | `0xA893` | Stack Pascal | SP+0=h (2B), SP+2=v (2B); C and Pascal layouts match |
+| `Button` | `0xA974` | Stack Pascal | No args; returns Boolean in D0 |
+| `NewWindow` | `0xA913` | Stack Pascal | 8 args, 26 bytes total; Phase 2 TODO |
+| **`FlushEvents`** | **`0xA032`** | **Register (D0)** | D0[31:16]=stopmask, D0[15:0]=evmask; use SWAP |
+
+**FlushEvents D0 packing (register-based):**
+```asm
+FlushEvents:  /* C: void FlushEvents(short evmask, short stopmask) */
+    move.l (sp)+, a0         /* pop ret addr */
+    move.l (sp), d0          /* D0[31:16]=evmask, D0[15:0]=stopmask (C stack order) */
+    swap d0                  /* D0[31:16]=stopmask, D0[15:0]=evmask (ROM order) */
+    .word 0xA032             /* ROM reads D0; no stack delta */
+    subq.l #4, sp            /* restore 4 bytes for PCC cleanup */
+    jmp (a0)
+```
 
 ---
 

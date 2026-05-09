@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
-# spike/run-spike.sh — Phase 0 feasibility script
+# spike/run-spike.sh — Phase 0/1 feasibility script
 #
-# Tests whether PCC's m68k backend produces output that can be linked
-# against pre-compiled Retro68 stubs and produce a bootable Mac binary.
+# Tests the PCC m68k compilation pipeline through to MacBinary output.
+#
+# Phase 0: PCC compiles hello.c → m68k ELF (proves compiler works)
+# Phase 1: Retro68 Elf2Mac links the ELF → MacBinary (proves full pipeline)
 #
 # Usage:
 #   bash spike/run-spike.sh setup      # extract Retro68 stubs from Docker and clone PCC
 #   bash spike/run-spike.sh build-pcc  # build PCC for m68k code generation
-#   bash spike/run-spike.sh compile    # compile hello.c with native PCC
-#   bash spike/run-spike.sh compare    # compare against Retro68 reference output
-#   bash spike/run-spike.sh all        # run setup, build-pcc, compile, compare
+#   bash spike/run-spike.sh compile    # Phase 0: compile hello.c with PCC → ELF
+#   bash spike/run-spike.sh link       # Phase 1: link ELF → MacBinary via Elf2Mac
+#   bash spike/run-spike.sh verify     # Phase 1: validate MacBinary header
+#   bash spike/run-spike.sh compare    # compare against Retro68 reference output (local only)
+#   bash spike/run-spike.sh all        # run setup, build-pcc, compile, link, verify, compare
 
 set -euo pipefail
 SPIKE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -153,6 +157,106 @@ cmd_compile() {
   echo "=== hello.elf produced at ${BUILD_DIR}/hello.elf ==="
 }
 
+# ── link ──────────────────────────────────────────────────────────────────
+cmd_link() {
+  echo "=== Phase 1: Linking hello.o → hello.bin via Retro68 Elf2Mac ==="
+
+  # Elf2Mac is the Retro68 linker wrapper.  Calling it directly with
+  # --mac-single produces a single-segment MacBinary (CODE 0 + CODE 1,
+  # type=APPL, creator=????) without going through GCC, which has --mac-flat
+  # baked into its specs and would produce a flat code resource instead.
+  #
+  # RETRO68_REAL_LD tells Elf2Mac where the real GNU ld lives (Elf2Mac
+  # normally finds it by appending ".real" to argv[0]).
+  #
+  # Library order: -lretrocrt first (_start + relocator), then -lc
+  # (atexit/exit referenced by libretrocrt.a start.c).  We skip -lgcc
+  # because PCC emits native 68020 instructions (muls.l, divu.l) rather
+  # than soft-math helpers.
+
+  docker run --rm \
+    -v "$(cd "${SPIKE_DIR}/.." && pwd)":/work \
+    --entrypoint /bin/bash \
+    "${RETRO68_IMAGE}" \
+    -c "
+      set -euo pipefail
+
+      # Locate Elf2Mac and the real ld in the Docker image.
+      # Known-good prefix from Phase 0 extraction: /Retro68-build/toolchain
+      BINDIR=/Retro68-build/toolchain/bin
+      ELF2MAC=\${BINDIR}/Elf2Mac
+      REAL_LD=\${BINDIR}/m68k-apple-macos-ld.real
+      LIBDIR=/Retro68-build/toolchain/m68k-apple-macos/lib
+
+      # Fall back to a full search if the expected paths aren't present.
+      if [ ! -x \"\${ELF2MAC}\" ]; then
+        ELF2MAC=\$(find /usr/local -name 'Elf2Mac' -type f 2>/dev/null | head -1)
+        BINDIR=\$(dirname \"\${ELF2MAC}\")
+        REAL_LD=\${BINDIR}/m68k-apple-macos-ld.real
+        LIBDIR=\$(dirname \"\${BINDIR}\")/m68k-apple-macos/lib
+      fi
+
+      # Fail explicitly if required paths are missing.
+      test -x \"\${ELF2MAC}\" || { echo \"FAIL: Elf2Mac not found at \${ELF2MAC}\"; exit 1; }
+      test -x \"\${REAL_LD}\"  || { echo \"FAIL: real ld not found at \${REAL_LD}\"; exit 1; }
+      test -d \"\${LIBDIR}\"   || { echo \"FAIL: lib dir not found at \${LIBDIR}\"; exit 1; }
+
+      echo \"Elf2Mac  : \${ELF2MAC}\"
+      echo \"Real ld  : \${REAL_LD}\"
+      echo \"Lib dir  : \${LIBDIR}\"
+
+      RETRO68_REAL_LD=\"\${REAL_LD}\" \"\${ELF2MAC}\" \
+        --mac-single \
+        -o /work/spike/build/hello.bin \
+        /work/spike/build/hello.o \
+        -L\"\${LIBDIR}\" \
+        -lretrocrt -lc
+
+      echo 'Elf2Mac: OK'
+    " \
+    && echo "Phase 1 link: OK" \
+    || { echo "Phase 1 link: FAILED"; exit 1; }
+
+  echo "=== hello.bin produced at ${BUILD_DIR}/hello.bin ==="
+  ls -lh "${BUILD_DIR}/hello.bin"
+}
+
+# ── verify ─────────────────────────────────────────────────────────────────
+cmd_verify() {
+  echo "=== Phase 1: Validating MacBinary format ==="
+  local BIN="${BUILD_DIR}/hello.bin"
+
+  if [ ! -f "${BIN}" ]; then
+    echo "FAIL: hello.bin not found — run 'link' first"
+    exit 1
+  fi
+
+  # MacBinary II header (128 bytes):
+  #   byte   0     : version (0x00 for old/MacBinary II compatibility)
+  #   bytes  1-64  : filename (Pascal string, byte 1 = length)
+  #   bytes 65-68  : file type OSType ('APPL' = 0x41 0x50 0x50 0x4C)
+  #   bytes 69-72  : creator OSType
+  # We verify the APPL type field and that the file is at least 128 bytes.
+
+  local FILE_SIZE
+  FILE_SIZE=$(wc -c < "${BIN}")
+  if [ "${FILE_SIZE}" -lt 128 ]; then
+    echo "FAIL: hello.bin is ${FILE_SIZE} bytes — too small for MacBinary header"
+    exit 1
+  fi
+
+  local FILE_TYPE
+  FILE_TYPE=$(dd if="${BIN}" bs=1 skip=65 count=4 2>/dev/null | od -A n -t x1 | tr -d ' \n')
+  if [ "${FILE_TYPE}" = "4150504c" ]; then
+    echo "PASS: MacBinary type = APPL (${FILE_TYPE})"
+  else
+    echo "FAIL: MacBinary type = '${FILE_TYPE}' (expected 4150504c = APPL)"
+    exit 1
+  fi
+
+  echo "=== MacBinary validation passed (${FILE_SIZE} bytes) ==="
+}
+
 # ── compare ───────────────────────────────────────────────────────────────
 # NOTE: This command is NOT run in CI (spike.yml). It is provided for local
 # comparison only. It requires Docker and that 'compile' has already run.
@@ -191,7 +295,9 @@ case "${1:-all}" in
   setup)     cmd_setup ;;
   build-pcc) cmd_build_pcc ;;
   compile)   cmd_compile ;;
+  link)      cmd_link ;;
+  verify)    cmd_verify ;;
   compare)   cmd_compare ;;
-  all)       cmd_setup && cmd_build_pcc && cmd_compile && cmd_compare ;;
-  *)         echo "Usage: $0 [setup|build-pcc|compile|compare|all]"; exit 1 ;;
+  all)       cmd_setup && cmd_build_pcc && cmd_compile && cmd_link && cmd_verify && cmd_compare ;;
+  *)         echo "Usage: $0 [setup|build-pcc|compile|link|verify|compare|all]"; exit 1 ;;
 esac
