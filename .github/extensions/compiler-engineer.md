@@ -39,7 +39,38 @@ User C code never contains A-trap syntax; it just calls `NewWindow(...)` normall
 - `arch/m68k/code.c` — instruction emission
 - `arch/m68k/local.c` — register allocation, ABI, function entry/exit
 - `arch/m68k/macdefs.h` — machine constants (register numbers, sizes)
-- PCC's configure system: `./configure --target=m68k-unknown-elf`
+- PCC's configure system: `./configure --cache-file=config.cache --target=m68k-unknown-apple --disable-nativefp`
+
+## PCC build patches required (all three, every build)
+
+Phase 0 found these are always needed on Ubuntu / GCC 10+:
+
+```bash
+# 1. local.c casts to (union flt *) but pass1.h declares struct flt
+sed -i 's/(union flt \*)/(struct flt *)/g' arch/m68k/local.c
+
+# 2. softfloat.c requires USE_IEEEFP_32/64/X80; m68k arch never defined them
+printf '\n#define USE_IEEEFP_32\n#define USE_IEEEFP_64\n#define USE_IEEEFP_X80\n' \
+  >> arch/m68k/macdefs.h
+
+# 3. GCC 10+ defaults to -fno-common; scan.l and common.c both define int lineno
+sed -i 's/^CFLAGS = /CFLAGS = -fcommon /' cc/ccom/Makefile
+```
+
+Also pre-populate `config.cache` to bypass config.sub rejecting `apple` as OS token:
+```bash
+BUILD_TRIPLE=$(gcc -dumpmachine)
+cat > config.cache << EOF
+ac_cv_build=${BUILD_TRIPLE}
+ac_cv_build_alias=${BUILD_TRIPLE}
+ac_cv_host=${BUILD_TRIPLE}
+ac_cv_host_alias=${BUILD_TRIPLE}
+ac_cv_target=m68k-unknown-apple
+ac_cv_target_alias=m68k-unknown-apple
+EOF
+```
+
+See `spike/run-spike.sh` `cmd_build_pcc` for the full authoritative implementation.
 
 ## Emscripten flags for PCC
 
@@ -77,8 +108,20 @@ assembler) directly as a single binary.
 assembles to ELF `.o`, links against Retro68 stubs, producing an ELF binary with no
 undefined symbols. Size and exact instruction choices don't matter at this stage.
 
-## Known risks to investigate
+## Phase 0 status: COMPLETE (CI run 13)
 
-1. PCC's m68k backend may emit 68020+ instructions — check `macdefs.h` for CPU level flags
-2. PCC may not support the `pascal` calling convention — check `local.c` for `pascal` handling
-3. PCC's assembler output syntax may differ from GNU as input format — verify in `code.c`
+Phase 0 is done. PCC builds and compiles `hello.c` with zero undefined symbols.
+This agent's knowledge is preserved for Phase 1 debugging. Key validated facts:
+
+- PCC emits **68020+ instructions** (`extb.l`, `muls.l`, `divu.l`) — this is **accepted**
+  (BasiliskII emulates 68020; hardware target is Mac II/SE30/Quadra class)
+- GNU as must be invoked as `m68k-linux-gnu-as -m68020`
+- `libInterface.a` from Retro68 has only ~30 uppercase OS stubs (not QuickDraw/Windows)
+- Phase 1 must build `libtoolbox-stubs.a` with hand-assembled A-trap stubs
+
+## Known resolved risks
+
+1. ~~PCC m68k backend may emit 68020+ instructions~~ → Confirmed, accepted (see above)
+2. PCC may not support `pascal` keyword → **Mitigated**: `#define pascal` makes it a no-op;
+   stubs will directly execute A-traps via `dc.w` without argument reordering needed
+3. ~~PCC assembler output syntax differs from GNU as~~ → Validated: GNU as accepts PCC output

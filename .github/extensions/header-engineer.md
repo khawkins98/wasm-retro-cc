@@ -28,8 +28,8 @@ Shim headers replace these with plain C90 extern declarations:
 ```c
 extern WindowPtr NewWindow(void *storage, const Rect *bounds, ...);
 ```
-PCC can parse this. The actual implementation lives in `libretro68.a` (pre-compiled
-with real Retro68 GCC).
+The actual implementation lives in `libtoolbox-stubs.a` (Phase 1 deliverable — hand-assembled
+stubs that accept C-cdecl calls and execute the appropriate A-trap via `dc.w 0xAXXX`).
 
 ## Rules for every shim header
 
@@ -140,24 +140,25 @@ extern void *NewHandle(int32_t byteCount);
 extern void DisposeHandle(void *h);
 ```
 
-## Verifying types against libretro68.a
+## Verifying types against libtoolbox-stubs.a
 
-After writing a header, verify the function signature matches the actual symbol:
+After writing a header, verify the symbol will be provided (Phase 1: once stubs are built):
 ```bash
-m68k-elf-nm spike/retro68-stubs/libretro68.a | grep NewWindow
-# Should show: T _NewWindow (or similar)
+m68k-linux-gnu-nm src/stubs/libtoolbox-stubs.a | grep NewWindow
+# Should show: T _NewWindow
 
-# Then check the mangled name to infer calling convention:
-m68k-elf-objdump -d spike/retro68-stubs/libretro68.a 2>/dev/null | grep -A5 "<_NewWindow>"
+# Inspect the stub to verify it accepts C-cdecl calls and dispatches the A-trap:
+m68k-linux-gnu-objdump -d src/stubs/libtoolbox-stubs.a 2>/dev/null | grep -A5 "<_NewWindow>"
 ```
 
-If the symbol is `_NewWindow` (C name mangling, one underscore prefix), the extern
-declaration is correct. If it's something else, adjust accordingly.
+Use `m68k-linux-gnu-nm` / `m68k-linux-gnu-objdump` (from `binutils-m68k-linux-gnu`).
+Do NOT use `m68k-elf-nm` — that package doesn't exist on Ubuntu.
 
 ## Adding a new Toolbox function
 
 1. Identify which header it belongs to (use Inside Macintosh Vol 1 as reference)
-2. Find the symbol in `libretro68.a`: `nm ... | grep FunctionName`
+2. Find the symbol in `libtoolbox-stubs.a` (Phase 1): `nm src/stubs/libtoolbox-stubs.a | grep FunctionName`
+   If the stub doesn't exist yet, write one in `src/stubs/` (see `docs/header-strategy.md`).
 3. Write the `extern` declaration with plain C types (no `pascal`)
 4. If the function takes a `pascal`-convention struct, pass fields individually or
    use a plain C struct wrapper — document this in the header comment

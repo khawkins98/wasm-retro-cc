@@ -35,11 +35,11 @@ set(CMAKE_C_STANDARD 99)
 
 # PCC source files (compiler pipeline only, NOT the driver cc.c which uses fork())
 set(PCC_SOURCES
-    pcc-src/cc/cc1/cgram.c
-    pcc-src/cc/cc1/inline.c
-    pcc-src/cc/cc1/trees.c
-    pcc-src/cc/cc1/pftn.c
-    # ... etc
+    pcc-src/cc/ccom/cgram.c
+    pcc-src/cc/ccom/inline.c
+    pcc-src/cc/ccom/trees.c
+    pcc-src/cc/ccom/pftn.c
+    # ... etc (see cc/ccom/ directory — NOT cc/cc1 which is the driver)
     pcc-src/arch/m68k/code.c
     pcc-src/arch/m68k/local.c
 )
