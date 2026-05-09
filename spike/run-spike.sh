@@ -49,6 +49,10 @@ cmd_setup() {
 # ── build-pcc ──────────────────────────────────────────────────────────────
 cmd_build_pcc() {
   echo "=== Building PCC ccom for m68k code generation ==="
+  if [ ! -d "${PCC_SRC}" ]; then
+    echo "ERROR: ${PCC_SRC} not found — run 'bash spike/run-spike.sh setup' first" >&2
+    exit 1
+  fi
   pushd "${PCC_SRC}" > /dev/null
 
   # PCC's configure.ac maps target_os=apple → abi=classic68k → m68k backend.
@@ -150,6 +154,8 @@ cmd_compile() {
 }
 
 # ── compare ───────────────────────────────────────────────────────────────
+# NOTE: This command is NOT run in CI (spike.yml). It is provided for local
+# comparison only. It requires Docker and that 'compile' has already run.
 cmd_compare() {
   echo "=== Building reference with Retro68 GCC (via Docker) ==="
   docker run --rm \

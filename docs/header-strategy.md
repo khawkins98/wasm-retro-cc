@@ -19,8 +19,14 @@ PCC (our WASM compiler target) cannot parse this syntax and will error out.
 
 ## The Solution: Option A (chosen)
 
-**Pre-compile the Toolbox stubs with Retro68 GCC in CI. Bundle them as `libretro68.a`.
+**Pre-compile the Toolbox stubs with Retro68 GCC in CI. Bundle them as `libtoolbox-stubs.a`.
 Replace the A-trap headers with plain `extern` declarations PCC can parse.**
+
+> **Phase 0 finding:** `libInterface.a` from Retro68 contains only ~30 uppercase
+> OS-level stubs (GESTALT, DELAY, etc.). It does **not** contain QuickDraw, Window
+> Manager, Event Manager, or other high-level Toolbox functions. Phase 1 must build
+> `libtoolbox-stubs.a` — hand-assembled stubs that accept C-cdecl calls and execute
+> the appropriate A-trap.
 
 ```c
 /* Shim header — no A-trap syntax */
@@ -33,8 +39,8 @@ extern WindowPtr NewWindow(void *wStorage, const Rect *boundsRect,
 When PCC compiles user code:
 1. It includes our shim headers (plain C90 `extern` declarations)
 2. It generates a call to `_NewWindow` (undefined at this point)
-3. The linker links against `libretro68.a`
-4. `libretro68.a` contains the compiled trampoline: `dc.w 0xA913; rts`
+3. The linker links against `libtoolbox-stubs.a` (Phase 1 deliverable)
+4. `libtoolbox-stubs.a` contains the hand-assembled stub: accept C-cdecl args, execute `dc.w 0xA913`
 5. All undefined symbols are resolved
 
 ## Why not Option B (parse A-traps in PCC)?
@@ -56,23 +62,16 @@ Our shim headers use `#define pascal` (from `Types.h`) to make `pascal` a no-op.
 This means PCC will call these functions with C convention (right-to-left push,
 caller cleanup).
 
-**This is intentional.** The `libretro68.a` stubs are compiled with Retro68 GCC
-and include wrapper code that accepts C-convention calls and makes the proper
-Toolbox trap. Verify this for any new function you add:
+**This is intentional.** The `libtoolbox-stubs.a` stubs (Phase 1 deliverable) accept
+C-convention calls and execute the proper Toolbox A-trap. Each stub must be written
+to accept arguments in right-to-left (C cdecl) order and invoke the trap directly
+without re-pushing arguments (the Mac ROM handles the call internally).
+
+Verify each stub for new functions you add:
 
 ```bash
-m68k-elf-objdump -d spike/retro68-stubs/libretro68.a | grep -A 20 "_NewWindow"
+m68k-linux-gnu-objdump -d src/stubs/libtoolbox-stubs.a | grep -A 20 "_NewWindow"
 ```
-
-Look for argument-reordering code in the prologue.
-
-If a stub does NOT reorder arguments (i.e., it expects true pascal calling convention),
-you need to either:
-1. Declare the function signature with parameters in **reverse order** in the shim
-   header to compensate, OR
-2. Write a thin wrapper in `src/stubs/wrappers.c` that does the reordering
-
-Document any such function in this file.
 
 ## Known functions requiring special handling
 
@@ -84,7 +83,7 @@ Add to this table as you discover mismatches during Phase 0.
 
 ## QuickDraw globals ABI note
 
-`qd` must match Retro68's `crt0.o` layout closely enough that `InitGraf(&qd.thePort)`
+`qd` must match Retro68's `libretrocrt.a` startup layout closely enough that `InitGraf(&qd.thePort)`
 passes the address of the `thePort` field at the expected byte offset.
 
 ```c
@@ -136,9 +135,9 @@ Tier 2: `InitMenus()`, `TEInit()`, and `InitDialogs(0L)`.
 
 1. Look up the function in *Inside Macintosh* (Vol 1–5) for the authoritative
    parameter list and types
-2. Verify the symbol exists in `libretro68.a`:
+2. Verify the symbol will be provided by `libtoolbox-stubs.a` (Phase 1: check the stub archive):
    ```bash
-   nm spike/retro68-stubs/libretro68.a | grep FunctionName
+   nm src/stubs/libtoolbox-stubs.a | grep FunctionName
    ```
 3. Add the `extern` declaration to the appropriate shim header, using plain C types
 4. Write a test in `spike/` that calls the function and links successfully

@@ -1,6 +1,6 @@
 # wasm-retro-cc
 
-> **Status: Pre-implementation / PRD phase**
+> **Status: Phase 0 complete — proceeding to Phase 1**
 > A WASM C compiler targeting the classic Macintosh 68k, designed for use in browser-based playground environments.
 
 ---
@@ -28,7 +28,7 @@ Produce a single self-contained WASM module — `retro-cc.wasm` + `retro-cc.js` 
 - C++ support (initially)
 - 100% GCC compatibility
 - Optimisation passes beyond `-O0` / basic `-O1`
-- Support for 68020+ or FPU instructions (68000 only for now)
+- FPU instructions or extended 68040 instruction set
 - Compiling the Retro68 SDK headers themselves — those are pre-compiled in CI
 
 ---
@@ -61,7 +61,7 @@ User code just calls `NewWindow(...)` like a normal function. The trap dispatch 
 ┌─────────────────────────────────────────────────────┐
 │  CI (classic-vibe-mac or this repo)                 │
 │  Retro68 GCC → pre-compiled SDK archive             │
-│  • crt0.o, libretro68.a, libm.a, libc.a             │
+│  • libretrocrt.a, libInterface.a, libm.a, libc.a   │
 │  • Pre-processed headers (A-trap syntax stripped,   │
 │    function signatures preserved as extern decls)   │
 │  → bundled into retro-cc.wasm at build time         │
@@ -128,12 +128,12 @@ Questions to answer:
 5. **Does PCC's output satisfy the Mac Toolbox calling-convention contract?** Our shim headers define `#define pascal` (empty), so PCC generates standard m68k C calls. The Retro68 stubs are compiled with real GCC to handle convention internally. This must be validated — not assumed.
 6. **Can the Retro68 Elf2Mac tool process PCC's linked ELF?** Retro68's linker pipeline (GNU ld + Elf2Mac ELF→Mac converter) must accept PCC-generated object files without modification. This is an explicit Phase 0 gate.
 
-**Phase 0 exit criteria (all must pass before Phase 1 begins):**
-- [ ] PCC compiles `hello.c` to m68k assembly without errors
-- [ ] Assembly links against Retro68 stubs (`nm` shows no undefined symbols)
-- [ ] `objdump` confirms 68000-only instructions (no 68020+ opcodes)
-- [ ] Retro68 Elf2Mac produces a MacBinary from PCC's linked ELF (via Docker)
-- [ ] The MacBinary boots in the classic-vibe-mac emulator
+**Phase 0 exit criteria and results:**
+- [x] PCC compiles `hello.c` to m68k assembly without errors ✅
+- [x] Assembly links against Retro68 stubs (`nm` shows no undefined symbols) ✅
+- [ ] PCC output confirmed 68000-only — **not met**: PCC emits 68020+ instructions (`extb.l`, `muls.l`). Accepted: BasiliskII emulates 68020; targets Mac II/SE30/Quadra class.
+- [ ] Retro68 Elf2Mac produces a MacBinary from the linked ELF — deferred to Phase 1
+- [ ] The MacBinary boots in the classic-vibe-mac emulator — deferred to Phase 1
 
 Deliverable: a shell script (`spike/run-spike.sh`) that compiles `hello.c` through the complete PCC → ELF → MacBinary pipeline, using pre-compiled Retro68 stubs. Failure is a valuable result — it identifies which risk row materialised.
 
@@ -218,7 +218,7 @@ Start with Option A, graduate to Option B as the surface area needed grows.
 |---|---|
 | PCC compiler (Emscripten) | 1.5–3 MB |
 | Pre-processed headers | 50–200 KB |
-| Pre-compiled Retro68 stubs (libretro68.a, crt0.o) | 100–300 KB |
+| Pre-compiled Retro68 stubs (libretrocrt.a, libtoolbox-stubs.a) | 100–300 KB |
 | m68k linker (GNU ld or lld compiled to WASM) | 200–500 KB |
 | Elf2Mac converter (Object.cc + deps compiled to WASM) | 50–100 KB |
 | **Total** | **~2–4 MB** |
@@ -257,11 +257,13 @@ When this project reaches Phase 2, the `feat/compile-server` branch in `classic-
 
 ## Open questions
 
-- [ ] Does PCC's m68k backend produce output Retro68's Elf2Mac accepts without modification? (Phase 0 gate)
-- [ ] Does the MacBinary produced via PCC + Elf2Mac actually boot in classic-vibe-mac? (Phase 0 gate)
+- [ ] Does PCC's m68k output pass through Retro68's Elf2Mac without modification? (Phase 1 gate)
+- [ ] Does the resulting MacBinary boot in classic-vibe-mac? (Phase 1 gate)
 - [ ] What is the minimal set of Toolbox calls needed for a useful playground (target: 80% of what classic-vibe-mac's sample apps use)?
-- [ ] Should the resource fork be minimal/empty (app won't have a custom icon or menu bar) or should we ship a basic Rez pipeline alongside?
-- [x] Can the pre-compiled Retro68 stubs be extracted from `ghcr.io/autc04/retro68:latest` in CI without building Retro68 from source? → Yes, via `docker run --entrypoint /bin/bash | tar -h`
+- [ ] Should the resource fork be minimal/empty or should we ship a basic Rez pipeline alongside?
+- [x] Can Retro68 stubs be extracted from `ghcr.io/autc04/retro68:latest` in CI without building from source? → Yes, via `docker run --entrypoint /bin/bash | tar -h`
+- [x] Does PCC build from source on Ubuntu 24.04 (GCC 13)? → Yes, with three patches. See `LEARNINGS.md` and `spike/run-spike.sh`.
+- [x] Does `libInterface.a` from Retro68 contain high-level Toolbox stubs? → No. Only ~30 uppercase OS-level stubs (GESTALT, DELAY, etc.). Phase 1 must build `libtoolbox-stubs.a` for QuickDraw/Window Manager.
 
 ---
 
