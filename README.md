@@ -1,1 +1,261 @@
 # wasm-retro-cc
+
+> **Status: Pre-implementation / PRD phase**
+> A WASM C compiler targeting the classic Macintosh 68k, designed for use in browser-based playground environments.
+
+---
+
+## Product Requirements Document
+
+### Problem
+
+Browser-based classic Mac emulators (e.g. [classic-vibe-mac](https://github.com/khawkins98/classic-vibe-mac)) let users view and edit Mac application source code, but cannot compile C in the browser — the GCC-based Retro68 toolchain is a large native binary. The only current workarounds are:
+
+1. A **dedicated compile server** (Docker + Retro68) — requires maintained backend infrastructure.
+2. **GitHub Actions** triggered by the browser — requires users to configure personal access tokens.
+3. **Local toolchain** — requires installing Retro68 locally.
+
+None of these allow a zero-config, zero-server, instant "edit → compile → run in emulator" loop.
+
+### Goal
+
+Produce a single self-contained WASM module — `retro-cc.wasm` + `retro-cc.js` — that can compile C source code targeting `m68k-apple-macos` entirely in a browser tab, returning a valid MacBinary that an emulator can hot-load.
+
+### Non-goals
+
+- C++ support (initially)
+- 100% GCC compatibility
+- Optimisation passes beyond `-O0` / basic `-O1`
+- Support for 68020+ or FPU instructions (68000 only for now)
+- Compiling the Retro68 SDK headers themselves — those are pre-compiled in CI
+
+---
+
+## Background: Why this is hard
+
+The Retro68 toolchain uses GCC with a custom `m68k-apple-macos` target. Mac Toolbox headers use a GCC-exclusive extension to declare ROM traps:
+
+```c
+/* Inside <Windows.h> */
+pascal WindowPtr NewWindow(...)
+    = { 0xA913 };   /* ← GCC m68k A-trap opcode syntax */
+```
+
+This opcode syntax is implemented only in GCC's m68k backend. No other compiler (Clang, TCC, PCC, chibicc) parses it.
+
+**The key insight:** user-written C code never contains this syntax — it's hidden inside SDK headers. If we pre-compile the entire Retro68 runtime (CRT, libretro68, Toolbox stubs) into a static library archive using real Retro68 GCC (in CI), user code can be compiled by any C compiler that:
+
+1. Produces valid m68k object code
+2. Can link against the pre-built archive
+3. Can output (or be post-processed into) MacBinary format
+
+User code just calls `NewWindow(...)` like a normal function. The trap dispatch is inside the pre-compiled library. The WASM compiler never sees A-trap syntax.
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│  CI (classic-vibe-mac or this repo)                 │
+│  Retro68 GCC → pre-compiled SDK archive             │
+│  • crt0.o, libretro68.a, libm.a, libc.a             │
+│  • Pre-processed headers (A-trap syntax stripped,   │
+│    function signatures preserved as extern decls)   │
+│  → bundled into retro-cc.wasm at build time         │
+└─────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────┐
+│  retro-cc.wasm  (runs in browser)                   │
+│                                                     │
+│  1. C compiler (PCC m68k backend) → .o file         │
+│  2. m68k linker → raw code segment                  │
+│  3. MacBinary assembler → .bin (both forks)         │
+│                                                     │
+│  In-memory filesystem (Emscripten MEMFS)            │
+│  Input:  user .c / .h files                         │
+│  Output: MacBinary blob                             │
+└─────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────┐
+│  Browser playground                                 │
+│  MacBinary → HFS patcher → running emulator         │
+└─────────────────────────────────────────────────────┘
+```
+
+---
+
+## Compiler choice: PCC
+
+**PCC (Portable C Compiler)** is the leading candidate:
+
+| Property | Value |
+|---|---|
+| m68k backend | ✅ Ships `arch/m68k/` (code.c, local.c, macdefs.h) |
+| Codebase size | ~130K LOC (vs GCC's ~15M) |
+| WASM portability | High — minimal OS dependencies, POSIX file I/O only |
+| Bundle size estimate | 1–4 MB gzipped (similar to wasm-rez's profile) |
+| A-trap syntax | ❌ Not needed (user code doesn't contain it) |
+| License | BSD |
+
+**Why not others:**
+
+| Compiler | m68k backend | WASM viable | Verdict |
+|---|---|---|---|
+| GCC (Retro68) | ✅ | ❌ 80–150 MB bundle | Too large |
+| LLVM/Clang | ✅ (experimental) | ❌ 12–16 MB bundle | Too large |
+| TinyCC | ❌ None | ✅ | No backend |
+| chibicc | ❌ None | ✅ | No backend |
+| **PCC** | ✅ | ✅ | **Leading candidate** |
+
+---
+
+## Phased delivery plan
+
+### Phase 0 — Feasibility spike (2–4 weeks)
+
+**Goal:** Answer the key unknowns before committing to full implementation.
+
+Questions to answer:
+1. Can PCC be compiled via Emscripten today? (check file I/O, `fork()`/`exec()` usage)
+2. Does PCC's m68k backend produce correct 68000 output for simple programs?
+3. Can a simple m68k relocatable object be linked against pre-built Retro68 stubs?
+4. What subset of Classic Mac headers can be pre-processed without A-trap syntax?
+
+Deliverable: a shell script that compiles `hello.c` to a raw 68k binary using PCC natively (not yet WASM), linked against a pre-compiled Retro68 archive. If this works, Phase 1 is unblocked.
+
+### Phase 1 — Core WASM module (6–10 weeks)
+
+- PCC compiled to WASM via Emscripten
+- Emscripten MEMFS for source file I/O
+- Pre-processed System 7 headers bundled in MEMFS
+- Pre-compiled Retro68 CRT + libretro68 linked at build time
+- Simple m68k relocatable linker (could start with a minimal linker written in C, compiled alongside PCC)
+- MacBinary output writer (produces `.bin` with both code + resource forks, resource fork can be minimal/empty initially)
+- JS wrapper API (see below)
+
+### Phase 2 — Integration + hardening (3–4 weeks)
+
+- Structured diagnostic output (file, line, column, severity) — same shape as the `Diagnostic` type in classic-vibe-mac
+- Bundle size optimisation (strip PCC, tree-shake headers)
+- npm package published to GitHub Packages
+- Integration with classic-vibe-mac playground (lazy-loaded, same pattern as `wasm-rez`)
+- End-to-end test: compile the Hello Mac sample project in-browser, verify it boots in the emulator
+
+### Phase 3 — Polish (ongoing)
+
+- Basic `-O1` optimisation
+- C99 support validation
+- More SDK headers (QuickDraw, Dialogs, TextEdit)
+- Source maps / better error messages
+
+---
+
+## JS API (target)
+
+Designed to mirror `wasm-rez`'s API for easy integration:
+
+```ts
+// Lazy-load (first call fetches ~3 MB, subsequent calls reuse module)
+const cc = await loadRetroCC(baseUrl);
+
+const result = await cc.compile({
+  files: [
+    { name: "main.c", content: "#include <Windows.h>\n..." },
+    { name: "utils.h", content: "..." },
+  ],
+  appName: "HelloMac",
+});
+
+if (result.ok) {
+  result.macBinary; // Uint8Array — ready for HFS patcher
+} else {
+  result.diagnostics; // { file, line, column, message, severity }[]
+}
+```
+
+---
+
+## Pre-processed headers strategy
+
+The Retro68 SDK headers use A-trap syntax that PCC cannot parse. Two approaches:
+
+**Option A — Extern shim headers (preferred for Phase 1):**
+Write a minimal set of hand-authored `extern` declarations covering the most-used ~50 Toolbox calls (NewWindow, DisposeWindow, DrawString, MoveTo, etc.), usable with any standard C compiler. These are ~5 KB total and avoid needing the full SDK.
+
+**Option B — Automated header pre-processing:**
+A build step (Python script, runs in CI) strips A-trap declarations from Retro68 headers, replacing:
+```c
+pascal WindowPtr NewWindow(Rect *boundsRect, ...) = { 0xA913 };
+```
+with:
+```c
+extern WindowPtr NewWindow(Rect *boundsRect, ...);
+```
+This enables the full SDK surface but requires careful testing — some headers use `__attribute__` and inline asm that also need stripping.
+
+Start with Option A, graduate to Option B as the surface area needed grows.
+
+---
+
+## Bundle size budget
+
+| Component | Estimated size (gzip) |
+|---|---|
+| PCC compiler (Emscripten) | 1.5–3 MB |
+| Pre-processed headers | 50–200 KB |
+| Pre-compiled Retro68 stubs (libretro68.a, crt0.o) | 100–300 KB |
+| m68k linker | 100–300 KB |
+| MacBinary writer | < 10 KB |
+| **Total** | **~2–4 MB** |
+
+Acceptable: the classic-vibe-mac emulator itself is ~1.7 MB. A 3 MB lazy-loaded WASM module (only fetched when the user clicks Compile) is reasonable.
+
+---
+
+## Risks
+
+| Risk | Likelihood | Mitigation |
+|---|---|---|
+| PCC's m68k backend has bugs for the code patterns Toolbox uses | Medium | Phase 0 spike tests against known-good Retro68 output |
+| `fork()`/`exec()` in PCC driver blocks Emscripten | Medium | PCC's compiler proper (cc1 equivalent) avoids fork — link directly |
+| Pre-compiled stubs ABI mismatch with PCC output | Medium | Use Retro68 linker script; validate against Retro68 reference output |
+| Bundle > 6 MB after optimisation | Low | PCC is small; fall back to lazy-load with progress indicator |
+| Pre-processed headers miss important Toolbox calls | High (initially) | Ship with explicit "supported calls" list, expand iteratively |
+
+---
+
+## Relationship to classic-vibe-mac
+
+This repo produces a standalone npm-publishable WASM artifact. `classic-vibe-mac` consumes it identically to how it consumes `wasm-rez`:
+
+```ts
+// In classic-vibe-mac's playground/retro-cc.ts
+const module = await loadModule(`${baseUrl}retro-cc/retro-cc.js`);
+```
+
+The WASM file is fetched at runtime (not bundled into the main JS chunk), so it doesn't affect initial page load. The Compile & Run button is disabled until the module loads.
+
+When this project reaches Phase 2, the `feat/compile-server` branch in `classic-vibe-mac` can be replaced or supplemented: users without a compile server configured get the WASM path instead.
+
+---
+
+## Open questions
+
+- [ ] Does PCC's m68k backend produce output compatible with Retro68's linker, or will we need a custom linker?
+- [ ] What is the minimal set of Toolbox calls needed for a useful playground (target: 80% of what classic-vibe-mac's sample apps use)?
+- [ ] Should the resource fork be minimal/empty (app won't have a custom icon or menu bar) or should we ship a basic Rez pipeline alongside?
+- [ ] Can the pre-compiled Retro68 stubs be extracted from `ghcr.io/autc04/retro68:latest` in CI without building Retro68 from source?
+
+---
+
+## References
+
+- [PCC source](https://github.com/IanHarvey/pcc) — m68k backend in `arch/m68k/`
+- [Retro68](https://github.com/autc04/Retro68) — GCC-based Mac 68k toolchain
+- [wasm-rez](https://github.com/autc04/Retro68) — companion project: Rez resource compiler compiled to WASM (existing proof-of-concept for this architecture)
+- [classic-vibe-mac issue #60](https://github.com/khawkins98/classic-vibe-mac/issues/60) — compile server (interim approach this project supersedes)
+- [classic-vibe-mac issue #57](https://github.com/khawkins98/classic-vibe-mac/issues/57) — original in-browser C compilation tracking issue
+- [Emception](https://github.com/nicowillis/emception) — reference for compiling Clang to WASM (bundle size data)
