@@ -1,19 +1,25 @@
 #!/usr/bin/env bash
-# spike/run-spike.sh — Phase 0/1 feasibility script
+# spike/run-spike.sh — Phase 0/1/2 feasibility script
 #
 # Tests the PCC m68k compilation pipeline through to MacBinary output.
 #
 # Phase 0: PCC compiles hello.c → m68k ELF (proves compiler works)
 # Phase 1: Retro68 Elf2Mac links the ELF → MacBinary (proves full pipeline)
+# Phase 2: Compile + link hello_toolbox.c with libtoolbox-stubs → MacBinary
+#           (proves A-trap stubs bridge C cdecl → Mac ROM correctly)
 #
 # Usage:
-#   bash spike/run-spike.sh setup      # extract Retro68 stubs from Docker and clone PCC
-#   bash spike/run-spike.sh build-pcc  # build PCC for m68k code generation
-#   bash spike/run-spike.sh compile    # Phase 0: compile hello.c with PCC → ELF
-#   bash spike/run-spike.sh link       # Phase 1: link ELF → MacBinary via Elf2Mac
-#   bash spike/run-spike.sh verify     # Phase 1: validate MacBinary header
-#   bash spike/run-spike.sh compare    # compare against Retro68 reference output (local only)
-#   bash spike/run-spike.sh all        # run setup, build-pcc, compile, link, verify, compare
+#   bash spike/run-spike.sh setup            # extract Retro68 stubs from Docker, clone PCC
+#   bash spike/run-spike.sh build-pcc        # build PCC for m68k code generation
+#   bash spike/run-spike.sh compile          # Phase 0: compile hello.c with PCC → ELF
+#   bash spike/run-spike.sh link             # Phase 1: link ELF → MacBinary via Elf2Mac
+#   bash spike/run-spike.sh verify           # Phase 1: validate MacBinary header
+#   bash spike/run-spike.sh build-stubs      # Phase 2: assemble libtoolbox-stubs.a
+#   bash spike/run-spike.sh compile-toolbox  # Phase 2: compile hello_toolbox.c → ELF
+#   bash spike/run-spike.sh link-toolbox     # Phase 2: link toolbox ELF → MacBinary
+#   bash spike/run-spike.sh verify-toolbox   # Phase 2: validate toolbox MacBinary header
+#   bash spike/run-spike.sh compare          # compare vs Retro68 reference (local only)
+#   bash spike/run-spike.sh all              # run all phases end-to-end
 
 set -euo pipefail
 SPIKE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -257,6 +263,149 @@ cmd_verify() {
   echo "=== MacBinary validation passed (${FILE_SIZE} bytes) ==="
 }
 
+# ── build-stubs ────────────────────────────────────────────────────────────
+cmd_build_stubs() {
+  echo "=== Phase 2: Assembling libtoolbox-stubs.a ==="
+  local STUBS_S="${SPIKE_DIR}/../src/stubs/libtoolbox-stubs.s"
+  local STUBS_O="${BUILD_DIR}/libtoolbox-stubs.o"
+  local STUBS_A="${BUILD_DIR}/libtoolbox-stubs.a"
+
+  [ -f "${STUBS_S}" ] || { echo "FAIL: ${STUBS_S} not found"; exit 1; }
+
+  # Assemble with m68k-linux-gnu-as (same toolchain used for Phase 0/1).
+  m68k-linux-gnu-as -m68020 "${STUBS_S}" -o "${STUBS_O}" \
+    && echo "Assembled: OK" \
+    || { echo "Assembly: FAILED"; exit 1; }
+
+  # Archive into a static library.
+  m68k-linux-gnu-ar rcs "${STUBS_A}" "${STUBS_O}" \
+    && echo "Archived: ${STUBS_A}" \
+    || { echo "Archive: FAILED"; exit 1; }
+
+  echo "=== libtoolbox-stubs.a ready ==="
+  m68k-linux-gnu-nm "${STUBS_A}" | grep " T " | awk '{print "  " $3}'
+}
+
+# ── compile-toolbox ─────────────────────────────────────────────────────────
+cmd_compile_toolbox() {
+  echo "=== Phase 2: Compiling hello_toolbox.c with PCC ccom m68k backend ==="
+  local SRC="${SPIKE_DIR}/hello_toolbox.c"
+
+  [ -f "${SRC}" ] || { echo "FAIL: ${SRC} not found"; exit 1; }
+
+  # Locate ccom (same as cmd_compile).
+  CCOM_BIN=$(find "${PCC_SRC}/cc/ccom" -name "*ccom" -type f 2>/dev/null | head -1)
+  if [ -z "${CCOM_BIN}" ]; then
+    echo "ERROR: ccom binary not found — did build-pcc succeed?"
+    exit 1
+  fi
+
+  # Preprocess with the system C preprocessor.
+  gcc -E \
+    -I "${SPIKE_DIR}/../src/include" \
+    "${SRC}" \
+    -o "${BUILD_DIR}/hello_toolbox.i" \
+    && echo "Preprocessing: OK" \
+    || { echo "Preprocessing: FAILED"; exit 1; }
+
+  # Compile to m68k assembly with PCC ccom.
+  "${CCOM_BIN}" "${BUILD_DIR}/hello_toolbox.i" "${BUILD_DIR}/hello_toolbox.s" \
+    && echo "PCC ccom compilation: OK" \
+    || { echo "PCC ccom compilation: FAILED"; exit 1; }
+
+  echo "--- Assembly output (first 60 lines) ---"
+  head -60 "${BUILD_DIR}/hello_toolbox.s"
+
+  # Assemble to ELF object.
+  m68k-linux-gnu-as -m68020 \
+    "${BUILD_DIR}/hello_toolbox.s" \
+    -o "${BUILD_DIR}/hello_toolbox.o" \
+    && echo "Assembly: OK" \
+    || { echo "Assembly: FAILED"; exit 1; }
+
+  echo "=== hello_toolbox.o produced ==="
+  m68k-linux-gnu-nm "${BUILD_DIR}/hello_toolbox.o" | grep " [TU] " | head -20
+}
+
+# ── link-toolbox ────────────────────────────────────────────────────────────
+cmd_link_toolbox() {
+  echo "=== Phase 2: Linking hello_toolbox.o → hello_toolbox.bin via Elf2Mac ==="
+
+  # Link order: toolbox stubs first (they resolve Toolbox references from hello_toolbox.o),
+  # then retrocrt (_start, relocator), then libc (atexit/exit, called by retrocrt).
+  docker run --rm \
+    -v "$(cd "${SPIKE_DIR}/.." && pwd)":/work \
+    --entrypoint /bin/bash \
+    "${RETRO68_IMAGE}" \
+    -c "
+      set -euo pipefail
+
+      BINDIR=/Retro68-build/toolchain/bin
+      ELF2MAC=\${BINDIR}/Elf2Mac
+      REAL_LD=\${BINDIR}/m68k-apple-macos-ld.real
+      LIBDIR=/Retro68-build/toolchain/m68k-apple-macos/lib
+
+      if [ ! -x \"\${ELF2MAC}\" ]; then
+        ELF2MAC=\$(find /usr/local -name 'Elf2Mac' -type f 2>/dev/null | head -1)
+        BINDIR=\$(dirname \"\${ELF2MAC}\")
+        REAL_LD=\${BINDIR}/m68k-apple-macos-ld.real
+        LIBDIR=\$(dirname \"\${BINDIR}\")/m68k-apple-macos/lib
+      fi
+
+      test -x \"\${ELF2MAC}\" || { echo \"FAIL: Elf2Mac not found at \${ELF2MAC}\"; exit 1; }
+      test -x \"\${REAL_LD}\"  || { echo \"FAIL: real ld not found at \${REAL_LD}\"; exit 1; }
+      test -d \"\${LIBDIR}\"   || { echo \"FAIL: lib dir not found at \${LIBDIR}\"; exit 1; }
+
+      echo \"Elf2Mac  : \${ELF2MAC}\"
+      echo \"Real ld  : \${REAL_LD}\"
+      echo \"Lib dir  : \${LIBDIR}\"
+
+      RETRO68_REAL_LD=\"\${REAL_LD}\" \"\${ELF2MAC}\" \
+        --mac-single \
+        -o /work/spike/build/hello_toolbox.bin \
+        /work/spike/build/hello_toolbox.o \
+        /work/spike/build/libtoolbox-stubs.a \
+        -L\"\${LIBDIR}\" \
+        -lretrocrt -lc
+
+      echo 'Elf2Mac (toolbox): OK'
+    " \
+    && echo "Phase 2 link: OK" \
+    || { echo "Phase 2 link: FAILED"; exit 1; }
+
+  echo "=== hello_toolbox.bin produced ==="
+  ls -lh "${BUILD_DIR}/hello_toolbox.bin"
+}
+
+# ── verify-toolbox ──────────────────────────────────────────────────────────
+cmd_verify_toolbox() {
+  echo "=== Phase 2: Validating hello_toolbox MacBinary format ==="
+  local BIN="${BUILD_DIR}/hello_toolbox.bin"
+
+  if [ ! -f "${BIN}" ]; then
+    echo "FAIL: hello_toolbox.bin not found — run 'link-toolbox' first"
+    exit 1
+  fi
+
+  local FILE_SIZE
+  FILE_SIZE=$(wc -c < "${BIN}")
+  if [ "${FILE_SIZE}" -lt 128 ]; then
+    echo "FAIL: hello_toolbox.bin is ${FILE_SIZE} bytes — too small for MacBinary header"
+    exit 1
+  fi
+
+  local FILE_TYPE
+  FILE_TYPE=$(dd if="${BIN}" bs=1 skip=65 count=4 2>/dev/null | od -A n -t x1 | tr -d ' \n')
+  if [ "${FILE_TYPE}" = "4150504c" ]; then
+    echo "PASS: MacBinary type = APPL (${FILE_TYPE})"
+  else
+    echo "FAIL: MacBinary type = '${FILE_TYPE}' (expected 4150504c = APPL)"
+    exit 1
+  fi
+
+  echo "=== MacBinary validation passed (${FILE_SIZE} bytes) ==="
+}
+
 # ── compare ───────────────────────────────────────────────────────────────
 # NOTE: This command is NOT run in CI (spike.yml). It is provided for local
 # comparison only. It requires Docker and that 'compile' has already run.
@@ -292,12 +441,24 @@ EOF
 
 # ── dispatch ──────────────────────────────────────────────────────────────
 case "${1:-all}" in
-  setup)     cmd_setup ;;
-  build-pcc) cmd_build_pcc ;;
-  compile)   cmd_compile ;;
-  link)      cmd_link ;;
-  verify)    cmd_verify ;;
-  compare)   cmd_compare ;;
-  all)       cmd_setup && cmd_build_pcc && cmd_compile && cmd_link && cmd_verify && cmd_compare ;;
-  *)         echo "Usage: $0 [setup|build-pcc|compile|link|verify|compare|all]"; exit 1 ;;
+  setup)            cmd_setup ;;
+  build-pcc)        cmd_build_pcc ;;
+  compile)          cmd_compile ;;
+  link)             cmd_link ;;
+  verify)           cmd_verify ;;
+  build-stubs)      cmd_build_stubs ;;
+  compile-toolbox)  cmd_compile_toolbox ;;
+  link-toolbox)     cmd_link_toolbox ;;
+  verify-toolbox)   cmd_verify_toolbox ;;
+  compare)          cmd_compare ;;
+  all)
+    cmd_setup && cmd_build_pcc \
+      && cmd_compile && cmd_link && cmd_verify \
+      && cmd_build_stubs && cmd_compile_toolbox && cmd_link_toolbox && cmd_verify_toolbox \
+      && cmd_compare
+    ;;
+  *)
+    echo "Usage: $0 [setup|build-pcc|compile|link|verify|build-stubs|compile-toolbox|link-toolbox|verify-toolbox|compare|all]"
+    exit 1
+    ;;
 esac
