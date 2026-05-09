@@ -46,6 +46,23 @@ The 68000 does not require strict stack alignment, but the System software assum
 word (2-byte) alignment for stack-allocated objects. Always `sizeof`-align stack
 allocations; never store a byte-aligned value at an odd address.
 
+## 68020+ instruction note (Phase 0 finding)
+
+PCC's m68k backend generates 68020+ instructions (`extb.l`, `muls.l`, `divu.l`, `link.l`).
+This was discovered in Phase 0 and is **accepted** for Phase 0 and Phase 1:
+
+- The classic-vibe-mac emulator (BasiliskII) emulates a 68020 by default.
+- Target hardware class: Mac II, IIx, SE/30, Quadra (68020 or 68030 CPU).
+- Out of scope: Mac 128K, 512K, Plus, SE, Classic (68000-only hardware).
+
+To inspect which 68020+ instructions PCC emits:
+```bash
+m68k-linux-gnu-objdump -d spike/build/hello.elf \
+  | grep -Ei "muls\.l|mulu\.l|divs\.l|divu\.l|extb\.l|link\.l"
+```
+
+These instructions are **expected** — their presence is not a failure.
+
 ## A5 world
 
 Classic Mac apps use A5 as a base register to access:
@@ -53,7 +70,7 @@ Classic Mac apps use A5 as a base register to access:
 - QuickDraw globals
 - Jump table
 
-`crt0.o` (from Retro68) sets up A5 before calling `main()`. Our PCC-compiled code
+`libretrocrt.a` (from Retro68) sets up A5 before calling `main()`. Our PCC-compiled code
 must never clobber A5. This is normally safe because:
 1. The C ABI designates A5 as callee-saved
 2. PCC should not generate code that writes to A5
@@ -80,22 +97,10 @@ and pass a pointer as a hidden parameter. In classic Mac practice, this is rare 
 the Toolbox (most return pointers or error codes). If you encounter a Toolbox function
 that seems to return a struct, check Inside Macintosh for its actual calling convention.
 
-## 68000 instruction set restrictions
+## 68000 instruction set — historical note
 
-The classic Macintosh (all models up to Mac IIsi) uses a 68000, 68010, 68020, or 68030.
-The original Mac 128k, 512k, and Plus use **68000 only**.
-
-The emulator in classic-vibe-mac targets a 68000 CPU. Do not generate:
-- `MULS.L` / `MULU.L` — 68020+ only
-- `DIVS.L` / `DIVU.L` — 68020+ only
-- `BFXXX` (bit field instructions) — 68020+ only
-- `PACK` / `UNPK` — 68020+ only
-
-PCC's m68k backend should default to 68000 instructions. Verify with:
-```bash
-objdump -d build/hello.elf | grep -E "muls.l|mulu.l|divs.l|divu.l|bfextu|bfexts"
-```
-No matches = safe.
+Earlier docs restricted output to 68000-only. Phase 0 found PCC emits 68020+ instructions;
+see the "68020+ instruction note" section above. The original restriction is removed.
 
 ## Endianness
 

@@ -44,10 +44,15 @@ LLVM was ruled out (12–16 MB gzipped). GCC/Retro68 was ruled out (80–150 MB)
 ```
 source.c
   └─▶ [PCC frontend + m68k codegen] → assembly text (MEMFS)
-        └─▶ [GNU as] → .o file (MEMFS)
-              └─▶ [GNU ld + libretro68.a + libc.a] → ELF binary (MEMFS)
-                    └─▶ [MacBinary wrapper] → .bin blob → returned to browser
+        └─▶ [GNU as -m68020] → .o file (MEMFS)
+              └─▶ [GNU ld + libretrocrt.a + libtoolbox-stubs.a + libc.a] → ELF binary (MEMFS)
+                    └─▶ [Elf2Mac / MacBinary wrapper] → .bin blob → returned to browser
 ```
+
+> **Note (Phase 0 finding):** PCC's m68k backend emits 68020+ instructions (`extb.l`,
+> `muls.l`, `divu.l`). This is accepted: the classic-vibe-mac emulator (BasiliskII)
+> emulates a 68020 by default. Phase 0 binaries target Mac II / SE/30 / Quadra class;
+> 68000-only Macs (128K, Plus, Classic) are out of scope.
 
 ### Shim headers (`src/include/`)
 
@@ -58,11 +63,18 @@ See `docs/header-strategy.md` for the detailed design.
 
 ### Pre-compiled stubs (`src/stubs/`)
 
-`libretro68.a` and `libc.a` are built by CI using the real Retro68 GCC cross-compiler.
-These contain the actual Toolbox trampoline code. They are committed as binary artifacts
-and updated only when Retro68 releases a new version.
+Extracted from `ghcr.io/autc04/retro68:latest` in CI. Key libraries:
+
+- **`libretrocrt.a`** — startup (`_start`), relocator, `malloc`, QuickDraw globals
+- **`libc.a`** — standard C library
+- **`libInterface.a`** — ~30 uppercase OS-level stubs only (GESTALT, DELAY, etc.)
+- **`libtoolbox-stubs.a`** — Phase 1 deliverable: hand-assembled stubs for QuickDraw,
+  Window Manager, Event Manager, etc. (libInterface.a does NOT include these)
 
 The stubs are embedded in the WASM bundle via Emscripten's `--preload-file`.
+
+> **Important:** `libInterface.a` symlinks to Retro68's multiversal/lib68k tree. Use
+> `tar -h` when extracting to dereference the symlink.
 
 ### MacBinary wrapper
 
@@ -75,9 +87,9 @@ Format reference: see `LEARNINGS.md` → MacBinary II Format section.
 
 | Phase | Goal | Status |
 |-------|------|--------|
-| 0 | Validate PCC m68k backend against Retro68 stubs natively | Not started |
-| 1 | WASM build: PCC alone (no linker), no browser integration | Not started |
-| 2 | WASM build: full pipeline (PCC + as + ld + MacBinary wrapper) | Not started |
+| 0 | Validate PCC m68k backend — build from source, compile hello.c, link, zero undefined symbols | **Complete** (CI run 13) |
+| 1 | WASM build: PCC + linker + Elf2Mac + libtoolbox-stubs + full Toolbox hello world | In progress |
+| 2 | WASM build: full browser pipeline, npm package | Not started |
 | 3 | Browser integration with classic-vibe-mac playground | Not started |
 | 4 | npm package release as `wasm-retro-cc` | Not started |
 
@@ -87,8 +99,8 @@ Format reference: see `LEARNINGS.md` → MacBinary II Format section.
 wasm-retro-cc/
 ├── src/
 │   ├── include/        Shim headers (Tier 1 + Tier 2 Mac Toolbox APIs)
-│   ├── stubs/          Pre-compiled .a files (built by CI)
-│   └── main.c          WASM entry point — JS-callable compile() function
+│   ├── stubs/          Pre-compiled .a files from Retro68 (libretrocrt.a, libc.a, libInterface.a)
+│   └── main.c          WASM entry point — JS-callable compile() function (Phase 1)
 ├── spike/
 │   ├── hello.c         Phase 0 test program
 │   └── run-spike.sh    Phase 0 automation

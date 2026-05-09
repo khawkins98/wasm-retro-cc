@@ -7,9 +7,12 @@ contain decisions that took significant research to reach. Relitigating them was
 
 ## Project status
 
-**Phase 0 — Feasibility spike.** No full WASM build exists yet. The primary goal is to
-confirm that PCC's m68k output is ABI-compatible with Retro68's pre-compiled stubs, and
-that a linked ELF binary can be produced without undefined symbols or 68020+ instructions.
+**Phase 0 — Complete.** CI run 13 passes: PCC builds from source on Ubuntu 24.04
+(GCC 13), `hello.c` compiles through the full PCC → as → ld pipeline with zero
+undefined symbols. Three PCC source patches are required — see `LEARNINGS.md`.
+
+**Phase 1 — Active.** Goal: WASM build with PCC + GNU as + GNU ld + Elf2Mac +
+libtoolbox-stubs.a; produce a real Toolbox-calling hello world MacBinary.
 
 ---
 
@@ -35,17 +38,18 @@ below rather than doing domain-specialist work inline.
 ```bash
 # Phase 0 spike (native PCC, no WASM)
 bash spike/run-spike.sh setup      # pull Retro68 Docker image, extract stubs/headers
-bash spike/run-spike.sh build-pcc  # build PCC for m68k target
+bash spike/run-spike.sh build-pcc  # build PCC for m68k target (requires PCC cloned to spike/pcc-src/)
 bash spike/run-spike.sh compile    # compile spike/hello.c → spike/build/hello.elf
-bash spike/run-spike.sh compare    # diff against Retro68 reference output
+bash spike/run-spike.sh compare    # diff ELF against Retro68 Docker reference output
 
 # Validation (run after any change to spike/ or src/include/)
 m68k-linux-gnu-nm spike/build/hello.elf | grep " U "
 # → zero output = pass (no undefined symbols)
 
+# 68020+ instructions are EXPECTED (PCC emits them; BasiliskII handles 68020):
 m68k-linux-gnu-objdump -d spike/build/hello.elf \
-  | grep -Ei "muls\.l|mulu\.l|divs\.l|divu\.l|bfextu|bfexts"
-# → zero output = pass (no 68020+ instructions)
+  | grep -Ei "muls\.l|mulu\.l|divs\.l|divu\.l|extb\.l"
+# → informational only; not a pass/fail gate
 
 # Phase 1+ (WASM build — requires Emscripten SDK)
 npm run build   # emcmake cmake -B build … && emmake cmake --build build
@@ -69,9 +73,9 @@ The core insight that makes this feasible:
 ```
 user source.c
   └─▶ [PCC m68k frontend + codegen] → .s assembly (MEMFS)
-        └─▶ [GNU as m68k] → .o (MEMFS)
-              └─▶ [GNU ld + libretro68.a + libc.a] → ELF binary (MEMFS)
-                    └─▶ [MacBinary II wrapper] → .bin → returned to browser
+        └─▶ [GNU as -m68020] → .o (MEMFS)
+              └─▶ [GNU ld + libretrocrt.a + libtoolbox-stubs.a + libc.a] → ELF binary (MEMFS)
+                    └─▶ [Elf2Mac / MacBinary II wrapper] → .bin → returned to browser
 ```
 
 ### Components
@@ -80,7 +84,7 @@ user source.c
 |---|---|---|
 | PCC (compiler) | `src/compiler/` (Phase 1) | Compiled to WASM via Emscripten; **no fork/exec** — link pipeline stages directly, not through PCC's driver `cc.c` |
 | Shim headers | `src/include/` | Plain C90 `extern` declarations; no A-trap syntax; `pascal` is a no-op |
-| Pre-compiled stubs | `src/stubs/` (Phase 1) | `libretro68.a`, `crt0.o` from Retro68 GCC; embedded via Emscripten `--preload-file` |
+| Pre-compiled stubs | `src/stubs/` (Phase 1) | `libretrocrt.a`, `libc.a`, `libInterface.a` from Retro68; `libtoolbox-stubs.a` assembled in Phase 1; embedded via Emscripten `--preload-file` |
 | MacBinary writer | `src/macbinary/` (Phase 1) | Wraps linker ELF output in MacBinary II header |
 | JS API wrapper | `src/js/retro-cc.ts` | Same lazy-load pattern as `wasm-rez` in classic-vibe-mac |
 | Phase 0 spike | `spike/` | Native (non-WASM) validation only |
@@ -112,19 +116,20 @@ const result = await cc.compile({
 - Plain C90 `extern` declarations only — no GCC extensions, no `= { 0xAxx }` syntax
 - `#define pascal` in `Types.h` makes `pascal` a no-op; all Toolbox calls use C convention
   (right-to-left push, caller cleans). The `libretro68.a` stubs handle argument reordering.
-- When adding a Toolbox function, verify the stub actually reorders arguments:
+- When adding a Toolbox function, verify it will be provided by `libtoolbox-stubs.a`:
   ```bash
-  m68k-elf-objdump -d spike/retro68-stubs/libretro68.a | grep -A 20 "_FunctionName"
+  nm src/stubs/libtoolbox-stubs.a | grep _FunctionName
   ```
-  If it doesn't, document the workaround in `docs/header-strategy.md`.
+  If it doesn't exist yet, add an assembly stub in `src/stubs/`.
 - Every new header entry gets a corresponding note in `docs/header-strategy.md`.
 - Tier 1 headers (needed for any windowed app): `Types.h`, `Quickdraw.h`, `Windows.h`,
   `Events.h`, `Fonts.h`, `Memory.h`. Implement these before any Tier 2 work.
 
 ### m68k ABI constraints
 
-- **68000 only** — the classic-vibe-mac emulator targets 68000. Do not generate
-  `MULS.L`, `MULU.L`, `DIVS.L`, `DIVU.L`, or bit-field instructions.
+- **68020+ output is accepted** — PCC emits 68020+ instructions (`extb.l`, `muls.l`, etc.);
+  BasiliskII emulates 68020. Target hardware: Mac II / SE/30 / Quadra class.
+  68000-only hardware (128K, Plus, Classic) is out of scope.
 - **A5 is sacred** — it holds the Application globals pointer. PCC must never write to A5.
   If you see crashes on the first global access, inspect the disassembly for `movea` to A5.
 - Return values: 16/32-bit integers in D0; pointers in A0; `Boolean` (uint8_t) in low byte of D0.
@@ -152,9 +157,9 @@ re-discovering known issues.
 |---|---|
 | PCC as compiler | Only small C compiler with an existing m68k backend; ~130K LOC; BSD licensed |
 | Pre-compiled stubs (not A-trap parsing) | A-trap syntax is GCC-only; users never write it |
-| `pascal` → no-op; stubs handle reordering | No PCC modification needed |
+| `pascal` → no-op; stubs handle dispatch | No PCC modification needed; stubs execute the A-trap directly |
 | Shim headers (Option A) before auto-processing (Option B) | Simpler; sufficient for Phase 1 |
-| 68000 only | classic-vibe-mac emulator target |
+| 68020+ output accepted | PCC emits 68020+; BasiliskII targets 68020; 68000-only hardware is out of scope |
 | No C++ initially | Sample apps are all C; C++ adds significant complexity |
 | Same JS API as wasm-rez | Proven pattern; consistent with classic-vibe-mac |
 
