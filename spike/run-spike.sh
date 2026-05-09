@@ -5,10 +5,11 @@
 # against pre-compiled Retro68 stubs and produce a bootable Mac binary.
 #
 # Usage:
-#   bash spike/run-spike.sh setup    # extract Retro68 stubs from Docker
-#   bash spike/run-spike.sh compile  # compile hello.c with native PCC
-#   bash spike/run-spike.sh compare  # compare against Retro68 reference output
-#   bash spike/run-spike.sh all      # run all three steps
+#   bash spike/run-spike.sh setup      # extract Retro68 stubs from Docker and clone PCC
+#   bash spike/run-spike.sh build-pcc  # build PCC for m68k code generation
+#   bash spike/run-spike.sh compile    # compile hello.c with native PCC
+#   bash spike/run-spike.sh compare    # compare against Retro68 reference output
+#   bash spike/run-spike.sh all        # run setup, build-pcc, compile, compare
 
 set -euo pipefail
 SPIKE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,7 +35,10 @@ cmd_setup() {
     echo "=== Cloning PCC ==="
     git clone https://github.com/IanHarvey/pcc "${PCC_SRC}"
   fi
+}
 
+# ── build-pcc ──────────────────────────────────────────────────────────────
+cmd_build_pcc() {
   echo "=== Building PCC for native host (to test m68k codegen) ==="
   mkdir -p "${PCC_SRC}/build"
   pushd "${PCC_SRC}" > /dev/null
@@ -64,13 +68,14 @@ cmd_compile() {
   head -60 "${BUILD_DIR}/hello.s"
 
   # Assemble
-  m68k-elf-as -m68000 -o "${BUILD_DIR}/hello.o" "${BUILD_DIR}/hello.s" \
+  m68k-linux-gnu-as -m68000 -o "${BUILD_DIR}/hello.o" "${BUILD_DIR}/hello.s" \
     && echo "Assembly: OK" \
-    || { echo "Assembly: FAILED (is m68k-elf-as installed?)"; exit 1; }
+    || { echo "Assembly: FAILED (is m68k-linux-gnu-as installed?)"; exit 1; }
 
   # Link against pre-compiled Retro68 stubs
   # NOTE: This is the critical test — do the symbol names match?
-  m68k-elf-ld \
+  m68k-linux-gnu-ld \
+    -m m68kelf \
     -T "${SPIKE_DIR}/mac.ld" \
     "${STUBS_DIR}/crt0.o" \
     "${BUILD_DIR}/hello.o" \
@@ -116,9 +121,10 @@ EOF
 
 # ── dispatch ──────────────────────────────────────────────────────────────
 case "${1:-all}" in
-  setup)   cmd_setup ;;
-  compile) cmd_compile ;;
-  compare) cmd_compare ;;
-  all)     cmd_setup && cmd_compile && cmd_compare ;;
-  *)       echo "Usage: $0 [setup|compile|compare|all]"; exit 1 ;;
+  setup)     cmd_setup ;;
+  build-pcc) cmd_build_pcc ;;
+  compile)   cmd_compile ;;
+  compare)   cmd_compare ;;
+  all)       cmd_setup && cmd_build_pcc && cmd_compile && cmd_compare ;;
+  *)         echo "Usage: $0 [setup|build-pcc|compile|compare|all]"; exit 1 ;;
 esac

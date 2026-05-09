@@ -20,6 +20,7 @@
 typedef GrafPort WindowRecord;
 typedef WindowRecord *WindowPtr;
 
+extern void      InitWindows(void);
 extern WindowPtr NewWindow(void *wStorage, const Rect *boundsRect,
                            const unsigned char *title, Boolean visible,
                            int16_t theProc, WindowPtr behind,

@@ -21,11 +21,19 @@
 #include <Types.h>
 #include <Quickdraw.h>
 #include <Windows.h>
+#include <Menus.h>
+#include <TextEdit.h>
+#include <Dialogs.h>
 #include <Events.h>
 #include <Fonts.h>
 #include <Memory.h>
 
-void main(void)
+static const unsigned char kWindowTitle[] = "\013Hello, Mac!";
+static const unsigned char kHelloLine1[] = "\031Hello from wasm-retro-cc!";
+static const unsigned char kHelloLine2[] =
+    "\062This was compiled by PCC -> m68k, not Retro68 GCC.";
+
+int main(void)
 {
     WindowPtr  win;
     EventRecord ev;
@@ -45,24 +53,26 @@ void main(void)
     win = NewWindow(
         0L,             /* storage — 0 means NewWindow allocates */
         &bounds,
-        "\pHello, Mac!", /* Pascal string title */
-        true,           /* visible */
+        kWindowTitle,
+        TRUE,           /* visible */
         documentProc,   /* window type */
         (WindowPtr)-1L, /* in front of all windows */
-        false,          /* no go-away box */
+        FALSE,          /* no go-away box */
         0L              /* refCon */
     );
     SetPort(win);
 
     /* Draw some text */
     MoveTo(20, 40);
-    DrawString("\pHello from wasm-retro-cc!");
+    DrawString(kHelloLine1);
 
     MoveTo(20, 60);
-    DrawString("\pThis was compiled by PCC -> m68k, not Retro68 GCC.");
+    DrawString(kHelloLine2);
 
     /* Wait for a mouse click, then quit */
     while (!Button()) {
         WaitNextEvent(everyEvent, &ev, 1L, 0L);
     }
+
+    return 0;
 }

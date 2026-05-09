@@ -82,22 +82,50 @@ Document any such function in this file.
 
 Add to this table as you discover mismatches during Phase 0.
 
+## QuickDraw globals ABI note
+
+`qd` must match Retro68's `crt0.o` layout closely enough that `InitGraf(&qd.thePort)`
+passes the address of the `thePort` field at the expected byte offset.
+
+```c
+typedef struct QDGlobals {
+    char    privates[76];
+    int32_t randSeed;
+    BitMap  screenBits;
+    Cursor  arrow;
+    Pattern dkGray;
+    Pattern ltGray;
+    Pattern gray;
+    Pattern black;
+    Pattern white;
+    GrafPtr thePort;   /* byte offset 202 in the m68k layout */
+} QDGlobals;
+```
+
+This offset comment is part of the ABI contract we are validating in Phase 0.
+Also note that `InitDialogs(0L)` is valid C90/C99: the integer constant zero
+converts to a null `ResumeProcPtr`.
+
 ## Header tiers
 
 **Tier 1** (required for `spike/hello.c`):
 - `Types.h` — fundamental types
-- `Quickdraw.h` — graphics primitives
+- `Quickdraw.h` — graphics primitives, including the `QDGlobals` shim layout needed for `qd.thePort`
 - `Windows.h` — window management
 - `Events.h` — event loop
 - `Fonts.h` — font initialisation
 - `Memory.h` — heap management
 
 **Tier 2** (needed for more complex apps):
-- `Menus.h` — menu bar and pull-down menus
-- `Dialogs.h` — dialog boxes and alerts
+
+`spike/hello.c` already needs part of the standard Macintosh startup sequence from
+Tier 2: `InitMenus()`, `TEInit()`, and `InitDialogs(0L)`.
+
+- `Menus.h` — menu bar and pull-down menus (`InitMenus` for standard app startup)
+- `Dialogs.h` — dialog boxes and alerts (`InitDialogs(0L)` passes a null resume procedure)
 - `Files.h` — File Manager (FSSpec, HOpen, etc.)
 - `Resources.h` — Resource Manager
-- `TextEdit.h` — editable text fields
+- `TextEdit.h` — editable text fields (`TEInit` for standard app startup)
 
 **Tier 3** (advanced):
 - `Sound.h` — Sound Manager
