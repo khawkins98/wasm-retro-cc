@@ -30,7 +30,8 @@ TRAP #1   ; followed by trap word, e.g. 0xA913 for NewWindow
 ```
 
 The A-trap syntax in SDK headers (`= { 0xA913 }`) tells GCC to inline this dispatch.
-In our architecture, this is hidden inside `libretro68.a` (pre-compiled from Retro68 GCC).
+In our architecture, this is dispatched by `libtoolbox-stubs.a` (Phase 1 deliverable —
+hand-assembled stubs that accept C-cdecl calls and execute the A-trap via `dc.w`).
 User code calls C functions. The stubs call ROM. Users and our WASM compiler never see traps.
 
 ## MacBinary II format
@@ -64,24 +65,35 @@ Study Retro68's `MakeAPPL` source for the exact padding and checksum logic.
 ## Retro68 stubs (pre-compiled, extracted from Docker)
 
 Located in `spike/retro68-stubs/` after running `spike/run-spike.sh setup`:
-- `crt0.o` — C runtime startup (sets up A5 world, calls main, exits)
-- `libretro68.a` — Toolbox stubs (each function is a thin wrapper around a TRAP)
-- `libc.a` — minimal C library (printf-to-console, memcpy, etc.)
+- `libretrocrt.a` — C runtime startup (`_start` sets up A5 world, calls main, exits),
+  relocator, `malloc`, QuickDraw globals. **Not `crt0.o`** — that doesn't exist separately.
+- `libc.a` — standard C library (printf-to-console, memcpy, etc.)
+- `libInterface.a` — ~30 uppercase OS-level stubs only (GESTALT, DELAY, etc.)
+  **Does NOT contain** NewWindow, InitGraf, InitWindows, or other high-level Toolbox functions.
 - `libm.a` — floating point (not needed initially)
+
+**Important:** `libInterface.a` is a symlink in the Retro68 image. Extract with `tar -h`
+to dereference it. Phase 1 must build `libtoolbox-stubs.a` for QuickDraw and Window Manager.
+
+To inspect symbols:
+```bash
+m68k-linux-gnu-nm spike/retro68-stubs/libretrocrt.a | grep " T " | head -20
+# Use m68k-linux-gnu-nm (from binutils-m68k-linux-gnu), NOT m68k-elf-nm
+```
 
 ## Shim headers (src/include/)
 
 These replace the Retro68 SDK headers for compilation. Rules:
 1. No `= { 0xAxx }` syntax — use `extern` declarations
-2. Correct Pascal calling convention marking (use `pascal` if PCC supports it)
-3. Exact function signatures — must match what `libretro68.a` exports
+2. All `pascal` keywords are erased by `#define pascal` in `Types.h` — PCC generates
+   standard C cdecl calls for all Toolbox functions
+3. Exact function signatures — must match what `libtoolbox-stubs.a` will export (Phase 1)
 4. Correct Mac types: OSErr (16-bit), OSType (32-bit), Handle (32-bit pointer), etc.
 
-To verify signatures, run:
+To verify a stub once Phase 1 stubs exist:
 ```bash
-m68k-elf-nm spike/retro68-stubs/libretro68.a | grep NewWindow
+m68k-linux-gnu-nm src/stubs/libtoolbox-stubs.a | grep NewWindow
 ```
-and compare with the declaration in `spike/retro68-headers/Windows.h`.
 
 ## Toolbox initialization order
 

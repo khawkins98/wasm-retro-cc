@@ -25,16 +25,16 @@ extremely hard to debug.
   The app will crash at the Toolbox call. Verify every function in the shim headers
   for `pascal` vs plain C convention.
 
-- **68000 vs 68020+**: PCC's m68k backend may emit 68020 instructions (MULS.L, etc.)
-  that the emulator's 68000 CPU will trap as illegal instructions. Check `macdefs.h`
-  for `MC68020`/`MC68030` defines and ensure they're not set.
+- **68020+ output is accepted**: PCC emits 68020+ instructions (`extb.l`, `muls.l`, etc.).
+  This is **not a bug** — BasiliskII emulates 68020; target hardware is Mac II/SE30/Quadra.
+  Do NOT try to suppress 68020+ instructions. Do check for FPU instructions (not expected).
 
 - **Big-endian**: The 68k is big-endian. Any struct, array, or multi-byte value
   must be stored big-endian. If PCC's m68k backend produces little-endian output
   (it shouldn't, but verify), Mac types will be wrong.
 
-- **A5 world**: Classic Mac apps use A5 as the global data pointer. `crt0.o` sets
-  this up, but if our main() entry point doesn't match what `crt0.o` expects
+- **A5 world**: Classic Mac apps use A5 as the global data pointer. `libretrocrt.a`'s
+  `_start` sets this up, but if our main() entry point doesn't match what the runtime
   (e.g., wrong `argc`/`argv` handling), A5 may be invalid. The app will crash on
   the first global variable access.
 
@@ -57,20 +57,21 @@ extremely hard to debug.
   check the return code, not just look for output file presence.
 
 ### Linker issues
-- **Duplicate symbols**: `libretro68.a` and `libc.a` may both define `memcpy`, `strlen`,
-  etc. Link order matters: put user objects first, then libretro68.a, then libc.a.
+- **Duplicate symbols**: `libtoolbox-stubs.a` and `libc.a` may both define low-level
+  helpers. Link order matters: user objects first, then libtoolbox-stubs.a, then
+  libretrocrt.a, then libc.a.
 - **Weak symbol resolution**: PCC may not emit weak symbols correctly for inline
   functions. Watch for multiple-definition linker errors.
 - **Section layout**: Mac apps expect the code segment at a specific address relative
   to A5. If the linker places sections in the wrong order, A5-relative addressing breaks.
 
-## What to check before approving a Phase 0 result
+## What to check before approving a Phase 1 result
 
 1. Run `nm spike/build/hello.elf` — zero undefined symbols required
-2. Check `objdump -d spike/build/hello.elf | grep -E "muls.l|divs.l|moveq"` —
-   no 68020-only instructions
-3. Verify calling convention of `NewWindow` stub matches shim header declaration
-4. Confirm byte order of any multi-byte literal in the assembly output is big-endian
+2. Run `objdump -d ... | grep -Ei "muls\.l|extb\.l"` — 68020+ instructions are **expected**;
+   FPU instructions (`fmove`, `fadd`, etc.) are NOT expected and would be a bug
+3. Verify each Toolbox stub in `libtoolbox-stubs.a` executes the correct A-trap opcode
+4. Confirm byte order of any multi-byte literal in assembly output is big-endian
 
 ## Red flags in code
 
