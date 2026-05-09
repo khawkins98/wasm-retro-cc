@@ -1,0 +1,24 @@
+# Ignored build outputs and local dev artifacts
+spike/retro68-stubs/
+spike/retro68-headers/
+spike/build/
+spike/pcc-src/
+
+# WASM build outputs
+build/
+dist/
+
+# Node / npm
+node_modules/
+*.tgz
+
+# Emscripten cache
+.emscripten_cache/
+.emscripten
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+*.swp

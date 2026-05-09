@@ -1,0 +1,30 @@
+name: Header request
+description: Request support for a Mac Toolbox API not yet in src/include/
+labels: ["headers"]
+body:
+  - type: input
+    id: function
+    attributes:
+      label: Function / type name
+      placeholder: "e.g. GetResource, ResError"
+    validations:
+      required: true
+  - type: input
+    id: header
+    attributes:
+      label: Which header file
+      placeholder: "e.g. Resources.h"
+    validations:
+      required: true
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use case
+      description: What are you trying to build that needs this API?
+    validations:
+      required: true
+  - type: textarea
+    id: inside_mac
+    attributes:
+      label: Inside Macintosh reference
+      description: Volume and chapter number if known (helps verify the signature)

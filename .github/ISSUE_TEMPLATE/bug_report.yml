@@ -1,0 +1,31 @@
+name: Bug report
+description: Compiler or linker produces incorrect output
+labels: ["bug"]
+body:
+  - type: textarea
+    id: source
+    attributes:
+      label: Source code
+      description: Minimal C file that reproduces the issue
+      render: c
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What should happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What actually happens? Include error messages or disassembly output.
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser / environment
+      placeholder: "Chrome 123 / Safari 17 / Node 20"
