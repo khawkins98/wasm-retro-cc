@@ -305,6 +305,7 @@ cmd_build_stubs() {
   local STUBS_O="${BUILD_DIR}/libtoolbox-stubs.o"
   local STUBS_A="${BUILD_DIR}/libtoolbox-stubs.a"
 
+  mkdir -p "${BUILD_DIR}"
   [ -f "${STUBS_S}" ] || { echo "FAIL: ${STUBS_S} not found"; exit 1; }
 
   # Assemble with m68k-linux-gnu-as (same toolchain used for Phase 0/1).
