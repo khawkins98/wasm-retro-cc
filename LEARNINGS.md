@@ -781,3 +781,92 @@ Motorola mnemonics (`subq.l`, `jmp`) but rejects others that conflict with MIT p
 (`swap d0`, `suba.l a0,a0`, displacement addressing like `4(sp)` vs `%sp@(4)`).
 Do not rely on this — always write full MIT syntax for hand-written stubs.
 
+
+---
+
+## MacBinary format and HFS patcher round-trip validation
+
+### MacBinary II header layout (relevant fields)
+
+| Offset | Length | Field |
+|--------|--------|-------|
+| 0      | 1      | version (0x00 for old/MacBinary II compat) |
+| 1      | 64     | Pascal filename (byte 1 = length, then chars) |
+| 65     | 4      | File type OSType (e.g. `APPL` = 0x4150504C) |
+| 69     | 4      | Creator OSType |
+| 83     | 4      | Data fork length (big-endian uint32) |
+| 87     | 4      | Resource fork length (big-endian uint32) |
+
+After the 128-byte header, the data fork follows (padded to 128-byte blocks),
+then the resource fork (also padded).
+
+### Resource fork structure (Inside Macintosh)
+
+The resource fork starts with a 16-byte header:
+- Bytes 0-3: offset to data section (within rsrc fork)
+- Bytes 4-7: offset to map section (within rsrc fork)
+- Bytes 8-11: data section length
+- Bytes 12-15: map section length
+
+The map section contains:
+- Bytes 24-25: offset to type list (within map section)
+- Bytes 26-27: offset to name list (within map section)
+- Type list: 2-byte count, then 8-byte entries: (4 type, 2 count-1, 2 ref-off)
+  - ref-off is the offset from the TYPE LIST START (including count word) to the ref list
+- Ref list: 12-byte entries: (2 ID, 2 name-off, 4 attr+data-offset, 4 handle)
+  - attr+data-offset: high byte = attributes, low 3 bytes = offset into data section
+
+### hello.bin resource structure (Phase 1 spike output)
+
+```
+CODE id=0  (24 bytes) — jump table resource
+  0000 0028   above_a5 = 40 bytes (A5 world size above A5)
+  0000 0000   below_a5 = 0
+  0000 0008   jump table length = 8 bytes = 1 entry
+  0000 0020   jump table offset from A5 = 32 (0x20)
+  003f 3c00 01a9f0  JT entry: MOVE.W #1, -(SP); A9F0 (LoadSeg trap → segment 1)
+
+CODE id=1  (10,638 bytes) — main code segment
+  Starts with valid m68k instructions (NOP, RTS, etc.)
+  Contains __start, main, and all linked C library code
+```
+
+### HFS patcher round-trip test (validates loadability)
+
+The `classic-vibe-mac` project contains `src/web/src/playground/hfs-patcher.ts`
+which can patch a MacBinary file into a 1.44 MB HFS disk image template.
+We verified that `hello.bin` passes this test:
+
+```js
+// Transpile hfs-patcher.ts → ESM, then:
+const parsed = parseMacBinary(helloBin);
+// parsed.type === 0x4150504C (APPL) ✓
+// parsed.rsrcLen === 10988 ✓
+
+const patched = patchEmptyVolumeWithBinary({
+  templateBytes: template,     // src/web/public/playground/empty-secondary.dsk
+  macBinary: helloBin,
+  filename: "hello",
+});
+// patched.length === 1474560 (1.44 MB) ✓
+```
+
+With hfsutils installed, `hls -la` on the patched disk shows:
+```
+f  APPL/????     10988        20 May  9 15:16 hello
+```
+
+This confirms hello.bin is structurally valid and can be loaded by the classic-vibe-mac
+emulator. Full boot verification (BasiliskII actually running the app) requires a
+browser with `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy`
+headers for SharedArrayBuffer support — this is a manual test step.
+
+### CI verification commands
+
+In `spike/run-spike.sh`, both `verify` and `verify-toolbox` now check:
+1. File size ≥ 128 bytes
+2. Type field = `APPL` (0x4150504C)
+3. Resource fork length > 0 (ensures CODE resources exist)
+
+The resource fork check uses Python's `struct.unpack('>I', ...)` to read the
+big-endian uint32 at offset 87 in the MacBinary header.
