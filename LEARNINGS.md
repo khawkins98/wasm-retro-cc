@@ -700,13 +700,13 @@ the real ld. You CANNOT feed it a pre-linked ELF. Feed it object files + library
 **FlushEvents D0 packing (register-based):**
 ```asm
 FlushEvents:  /* C: void FlushEvents(short evmask, short stopmask) */
-    move.l (sp)+, a0         /* pop ret addr */
-    move.l (sp), d0          /* D0[31:16]=evmask, D0[15:0]=stopmask (C stack order) */
-    swap d0                  /* D0[31:16]=stopmask, D0[15:0]=evmask (ROM order) */
+    /* %sp -> [ret] [evmask (2B)] [stopmask (2B)] */
+    movl %sp@(4), %d0        /* D0[31:16]=evmask, D0[15:0]=stopmask (C stack order) */
+    swap %d0                 /* D0[31:16]=stopmask, D0[15:0]=evmask (ROM order) */
     .word 0xA032             /* ROM reads D0; no stack delta */
-    subq.l #4, sp            /* restore 4 bytes for PCC cleanup */
-    jmp (a0)
+    rts                      /* PCC cleans 4 bytes of stack args */
 ```
+Note: this is GNU AS MIT syntax (m68k-linux-gnu-as default). See "m68k assembly syntax" section.
 
 ---
 
@@ -741,3 +741,43 @@ FlushEvents:  /* C: void FlushEvents(short evmask, short stopmask) */
 
 **Toolchain path inside the image:** `/Retro68-build/toolchain/m68k-apple-macos/`
 (lib/ and include/ subdirectories).
+
+---
+
+## m68k assembly syntax: use GNU AS MIT style (not Motorola)
+
+`m68k-linux-gnu-as` on Ubuntu defaults to **MIT/AT&T syntax**, NOT Motorola syntax.
+This affects all hand-written `.s` files (PCC's generated assembly happens to work
+because PCC targets this assembler, but our stub files broke).
+
+**MIT syntax rules for m68k:**
+- Register prefix: `%d0`, `%a0`, `%sp` (NOT `d0`, `a0`, `sp`)
+- Indirect: `%a0@` (NOT `(a0)`)
+- Post-increment: `%sp@+` (NOT `(sp)+`)
+- Displacement: `%sp@(4)` (NOT `4(sp)`)
+- Size in opcode, not suffix: `movl`, `movw`, `subql`, `subal` (NOT `move.l`, `move.w`, etc.)
+- SWAP: `swap %d0` (NOT `swap d0`)
+
+**Working example (FlushEvents stub):**
+```asm
+FlushEvents:
+	movl	%sp@(4), %d0	/* D0[31:16]=evmask, D0[15:0]=stopmask */
+	swap	%d0		/* D0[31:16]=stopmask, D0[15:0]=evmask (ROM order) */
+	.word	0xA032
+	rts
+```
+
+**Memory-to-memory MOVE:** Avoid it. Even though 68k hardware supports it, some
+assembler configurations reject it. Use a register as intermediate:
+```asm
+movw %sp@, %d0       | save word
+movw %sp@(2), %d1    | save other word
+movw %d1, %sp@       | write back
+movw %d0, %sp@(2)    | write back
+```
+
+**Why some Motorola mnemonics partially work:** Gas loosely accepts some unambiguous
+Motorola mnemonics (`subq.l`, `jmp`) but rejects others that conflict with MIT parsing
+(`swap d0`, `suba.l a0,a0`, displacement addressing like `4(sp)` vs `%sp@(4)`).
+Do not rely on this — always write full MIT syntax for hand-written stubs.
+
