@@ -607,22 +607,30 @@ RETRO68_REAL_LD=/Retro68-build/toolchain/bin/m68k-apple-macos-ld.real \
   -o hello.bin \
   hello.o \
   -L/Retro68-build/toolchain/m68k-apple-macos/lib \
-  -lretrocrt -lc -lretrocrt
+  -lretrocrt -lc -lInterface -lgcc -lretrocrt
 ```
 
-**CRITICAL: Repeat `-lretrocrt` at the end** to resolve circular archive dependencies.
-`libc.a(exit.o)` needs `_exit` from libretrocrt; `libc.a(__atexit.o)` needs `malloc`/`free`.
-Since ld scans archives left-to-right only once, retrocrt must appear after libc too.
-The idiom `-lretrocrt -lc -lretrocrt` (archive listed twice) is the standard fix.
+**Full library order explained:**
+- `-lretrocrt`: CRT startup (`_start`, relocator, `_exit` → `ExitToShell`, malloc)
+- `-lc`: newlib libc (exit, atexit, string functions); references back into retrocrt
+- `-lInterface`: ALL Mac Toolbox A-trap stubs; needed by libretrocrt's syscalls.c
+- `-lgcc`: soft-math helpers (`__mulsi3`, `__udivsi3`); needed by libretrocrt's malloc
+- `-lretrocrt` (again): resolve circular libc ↔ retrocrt deps (libc needs `_exit`/malloc)
 
 **`--mac-single` vs `--mac-flat`:**
 - `--mac-single`: produces a complete MacBinary APPL (CODE 0 + CODE 1 resources). No SIZE resource.
 - `--mac-flat`:   produces a flat binary code resource (not bootable as an app).
 - `m68k-apple-macos-gcc` forces `--mac-flat` in its specs — never use it for building an app binary.
 
-**`-lgcc` is NOT needed** when using PCC: PCC emits native 68020 instructions (`muls.l`, `divu.l`)
-rather than calls to GCC soft-math helpers (`__mulsi3`, etc.). Omit `-lgcc` unless PCC-compiled
-code unexpectedly references these symbols.
+**`-lgcc` IS required** even when using PCC: `libretrocrt.a` was compiled by GCC targeting 68000,
+so it emits calls to soft-math helpers (`__mulsi3`, `__udivsi3`). These live in `libgcc.a`.
+PCC-compiled code itself doesn't need them, but Retro68's CRT does.
+
+**`-lInterface` IS required**: `libretrocrt.a(syscalls.c.obj)` calls Mac File Manager and volume
+traps (`FSWRITE`, `FSREAD`, `FSCLOSE`, `FLUSHVOL`, etc.) that are provided by `libInterface.a`.
+This is Retro68's pre-built stub library for ALL Mac Toolbox calls. It must come after `-lc`.
+For Phase 2 builds with custom stubs (`libtoolbox-stubs.a`): list our stubs before `-lInterface`
+so our 12 functions shadow the Interface versions; Interface still provides everything else.
 
 **Elf2Mac is a linker wrapper, not a converter:** It generates its own linker script and calls
 the real ld. You CANNOT feed it a pre-linked ELF. Feed it object files + library flags.

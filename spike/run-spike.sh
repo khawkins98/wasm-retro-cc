@@ -211,12 +211,18 @@ cmd_link() {
       echo \"Real ld  : \${REAL_LD}\"
       echo \"Lib dir  : \${LIBDIR}\"
 
+      # Library order for circular deps:
+      #   libretrocrt: CRT startup; its malloc.c needs __mulsi3 (libgcc) and memcpy (libc);
+      #                its syscalls.c needs Mac File Manager traps (libInterface).
+      #   libgcc:      soft-math helpers (__mulsi3, __udivsi3) from Retro68's GCC-compiled libs.
+      #   libInterface: ALL Mac Toolbox A-trap stubs; required by libretrocrt syscalls.
+      #   Repeat -lretrocrt after -lc to resolve circular libc ↔ retrocrt deps.
       RETRO68_REAL_LD=\"\${REAL_LD}\" \"\${ELF2MAC}\" \
         --mac-single \
         -o /work/spike/build/hello.bin \
         /work/spike/build/hello.o \
         -L\"\${LIBDIR}\" \
-        -lretrocrt -lc -lretrocrt
+        -lretrocrt -lc -lInterface -lgcc -lretrocrt
 
       echo 'Elf2Mac: OK'
     " \
@@ -366,7 +372,7 @@ cmd_link_toolbox() {
         /work/spike/build/hello_toolbox.o \
         /work/spike/build/libtoolbox-stubs.a \
         -L\"\${LIBDIR}\" \
-        -lretrocrt -lc -lretrocrt
+        -lretrocrt -lc -lInterface -lgcc -lretrocrt
 
       echo 'Elf2Mac (toolbox): OK'
     " \
