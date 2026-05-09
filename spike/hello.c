@@ -1,21 +1,17 @@
 /*
- * spike/hello.c — minimal Classic Mac windowed "Hello World"
+ * spike/hello.c — Phase 0 pipeline validation
  *
- * This is the Phase 0 test program. It must compile with PCC's m68k backend
- * using only our shim headers (no A-trap syntax anywhere in user code).
+ * Includes all shim headers to validate PCC can parse them.
+ * Uses only integer arithmetic — no Toolbox calls.
  *
- * What it tests:
- *   - Basic Mac toolbox initialization sequence
- *   - Window creation and drawing
- *   - Simple event loop (quit on any click)
- *   - Standard C function call ABI to Toolbox stubs
+ * Phase 0 goal: prove PCC m68k compilation + linking works end-to-end.
+ * Phase 1 will add Toolbox A-trap stubs and real Mac initialization.
  *
- * What it deliberately avoids:
- *   - pascal keyword (ABI validation deferred)
- *   - Any GCC extensions
- *   - C99 features beyond basic types (test C89 compat first)
+ * Deliberately avoids:
+ *   - Toolbox calls (require A-trap stubs, deferred to Phase 1)
+ *   - GCC extensions
  *   - Floating point
- *   - malloc/free (use Mac Memory Manager instead)
+ *   - C99 features beyond basic types (test C89 compat first)
  */
 
 #include <Types.h>
@@ -28,51 +24,14 @@
 #include <Fonts.h>
 #include <Memory.h>
 
-static const unsigned char kWindowTitle[] = "\013Hello, Mac!";
-static const unsigned char kHelloLine1[] = "\031Hello from wasm-retro-cc!";
-static const unsigned char kHelloLine2[] =
-    "\062This was compiled by PCC -> m68k, not Retro68 GCC.";
-
 int main(void)
 {
-    WindowPtr  win;
-    EventRecord ev;
-    Rect       bounds;
-
-    /* Standard Mac initialization sequence */
-    InitGraf(&qd.thePort);
-    InitFonts();
-    InitWindows();
-    InitMenus();
-    TEInit();
-    InitDialogs(0L);
-    FlushEvents(everyEvent, 0);
-
-    /* Create a simple document window */
-    SetRect(&bounds, 60, 60, 420, 240);
-    win = NewWindow(
-        0L,             /* storage — 0 means NewWindow allocates */
-        &bounds,
-        kWindowTitle,
-        TRUE,           /* visible */
-        documentProc,   /* window type */
-        (WindowPtr)-1L, /* in front of all windows */
-        FALSE,          /* no go-away box */
-        0L              /* refCon */
-    );
-    SetPort(win);
-
-    /* Draw some text */
-    MoveTo(20, 40);
-    DrawString(kHelloLine1);
-
-    MoveTo(20, 60);
-    DrawString(kHelloLine2);
-
-    /* Wait for a mouse click, then quit */
-    while (!Button()) {
-        WaitNextEvent(everyEvent, &ev, 1L, 0L);
+    /* Integer loop — exercises PCC m68k code generation.
+     * Sum of squares 1..10 = 385; return low byte (1). */
+    int i;
+    long sum = 0L;
+    for (i = 1; i <= 10; i++) {
+        sum += (long)i * (long)i;
     }
-
-    return 0;
+    return (int)(sum & 0x7F);
 }

@@ -6,6 +6,12 @@ on:
       - 'spike/**'
       - 'src/include/**'
       - '.github/workflows/spike.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'spike/**'
+      - 'src/include/**'
+      - '.github/workflows/spike.yml'
   workflow_dispatch:
 
 jobs:
@@ -20,6 +26,11 @@ jobs:
       - name: Extract Retro68 stubs
         run: bash spike/run-spike.sh setup
 
+      - name: List extracted stubs (diagnostic)
+        run: |
+          echo "=== Retro68 stubs extracted ==="
+          ls -lh spike/retro68-stubs/ || echo "(none)"
+
       - name: Build PCC (m68k target)
         run: bash spike/run-spike.sh build-pcc
 
@@ -28,7 +39,7 @@ jobs:
 
       - name: Validate — no undefined symbols
         run: |
-          UNDEF=$(m68k-linux-gnu-nm spike/build/hello.elf | grep " U ")
+          UNDEF=$(m68k-linux-gnu-nm spike/build/hello.elf | grep " U " || true)
           if [ -n "$UNDEF" ]; then
             echo "FAIL: undefined symbols:"
             echo "$UNDEF"
