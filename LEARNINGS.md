@@ -360,6 +360,36 @@ Even after fixing `union flt`, `--disable-nativefp` is the correct flag for cros
 It prevents PCC from using host-native floating point for m68k targets.
 Without it, PCC embeds host FP constants directly, which produces incorrect cross-compiled code.
 
+### softfloat.c — USE_IEEEFP_* missing from m68k macdefs.h (solved)
+
+`common/softfloat.c` requires `USE_IEEEFP_32`, `USE_IEEEFP_64`, and `USE_IEEEFP_X80` to
+compile. These macros tell softfloat what IEEE float formats the target uses and must be
+defined in each arch's `macdefs.h`. The i386 and amd64 backends define all three; the m68k
+backend never did — a clear omission.
+
+**Fix:** Append the three defines to `arch/m68k/macdefs.h` before building:
+```bash
+printf '\n/* floating point definitions (required by softfloat.c) */\n#define USE_IEEEFP_32\n#define USE_IEEEFP_64\n#define USE_IEEEFP_X80\n' >> arch/m68k/macdefs.h
+```
+
+Classic Mac float/double map to IEEE 32/64; long double to Apple SANE 80-bit extended
+(USE_IEEEFP_X80 is the closest match — Intel x80, same bit count, slightly different
+96-bit storage on m68k). Phase 0 code uses no floating point; the exact semantics don't
+matter as long as softfloat.c compiles.
+
+### GCC 10+ -fno-common: lineno multiple definition (solved)
+
+PCC's `scan.l` (line 204) and `mip/common.c` (line 76) both declare `int lineno;` as a
+tentative global. Under GCC < 10 (which defaulted to `-fcommon`), these merged into a
+single COMMON symbol. GCC 10+ defaults to `-fno-common`, treating both as strong
+definitions — causing a multiple-definition linker error.
+
+**Fix:** After configure generates `cc/ccom/Makefile`, patch CFLAGS to add `-fcommon`:
+```bash
+sed -i 's/^CFLAGS = /CFLAGS = -fcommon /' cc/ccom/Makefile
+```
+This only affects the PCC vendor build, not any code compiled by PCC.
+
 ---
 
 ### Retro68 lib directory — actual contents (verified 2025-05)
@@ -568,9 +598,11 @@ PCC never needs to generate A-trap opcodes — it just calls the stubs normally.
 - [x] Does PCC's `local.c` compile? Fixed by patching `union flt` → `struct flt`.
 - [x] Does `crt0.o` exist in Retro68 lib dir? **NO** — startup is in `libretrocrt.a` (`_start` symbol).
 - [x] Are Toolbox stubs in `libInterface.a`? **NO** — inline A-traps in Retro68 headers; we need our own stubs.
-- [ ] Does PCC `ccom` compile our preprocessed hello.i without crashing? (Phase 0 gate)
-- [ ] Does Elf2Mac's Object.cc accept PCC-linked ELF without modification? (Phase 0 gate)
-- [ ] Does the resulting MacBinary actually boot in classic-vibe-mac? (Phase 0 gate)
+- [x] Does PCC `ccom` compile our preprocessed hello.i without crashing? **YES** — Phase 0 CI passing as of run 13.
+- [x] Does PCC build on Ubuntu 24.04 with GCC 13? **YES** with three patches: `union flt → struct flt`,
+      `USE_IEEEFP_32/64/X80` in m68k macdefs.h, and `-fcommon` in CFLAGS (all applied in `run-spike.sh`).
+- [ ] Does Elf2Mac's Object.cc accept PCC-linked ELF without modification? (Phase 1 gate)
+- [ ] Does the resulting MacBinary actually boot in classic-vibe-mac? (Phase 1 gate)
 - [ ] Does classic-vibe-mac (BasiliskII) emulate 68000 or 68020+? (affects 68020-instruction concern)
 - [ ] What are the exact calling conventions (reg vs stack) for each Toolbox A-trap? (Phase 1 stub work)
 
