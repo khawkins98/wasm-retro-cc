@@ -1,6 +1,6 @@
 # wasm-retro-cc
 
-> **Status: Native spike pipeline complete through Phase 2 (CI green).**
+> **Status: Native spike pipeline complete through `spike-phase2` (CI green). Browser WASM module — issue #1's "Phase 3" — not started; planning in #3.**
 > A WASM C compiler targeting the classic Macintosh 68k, designed for use in browser-based playground environments.
 
 ---
@@ -133,7 +133,20 @@ User code just calls `NewWindow(...)` like a normal function. The trap dispatch 
 
 ## Phased delivery plan
 
-### Phase 0 — Feasibility spike (2–4 weeks)
+> **A note on phase numbering.** This project has two parallel phase tracks
+> and the names have collided in earlier docs. The current convention is:
+>
+> - **`spike-phase0/1/2`** — the native, CI-driven pipeline (PCC + Docker
+>   Elf2Mac → MacBinary). All three are complete and green.
+> - **`wasm-phase1/2`** — the browser-native compiler module. Not started.
+>   This is what handoff issue #1 refers to as "Phase 3".
+> - **Polish** — formerly labelled "Phase 3" in this document; reserved for
+>   `-O1`, more SDK headers, source maps, etc., once the WASM module ships.
+>
+> See `docs/architecture.md` for the same split applied to the build phases
+> table.
+
+### `spike-phase0` — Feasibility spike (2–4 weeks)
 
 **Goal:** Answer the key unknowns before committing to full implementation.
 
@@ -145,17 +158,22 @@ Questions to answer:
 5. **Does PCC's output satisfy the Mac Toolbox calling-convention contract?** Our shim headers define `#define pascal` (empty), so PCC generates standard m68k C calls. The Retro68 stubs are compiled with real GCC to handle convention internally. This must be validated — not assumed.
 6. **Can the Retro68 Elf2Mac tool process PCC's linked ELF?** Retro68's linker pipeline (GNU ld + Elf2Mac ELF→Mac converter) must accept PCC-generated object files without modification. This is an explicit Phase 0 gate.
 
-**Phase 0/1 spike exit criteria and results (actual):**
+**`spike-phase0/1` exit criteria and results (actual):**
 - [x] PCC compiles `hello.c` to m68k assembly without errors ✅
 - [x] Assembly links against Retro68 stubs (`nm` shows no undefined symbols) ✅
-- [ ] PCC output confirmed 68000-only — **not met**: PCC emits 68020+ instructions (`extb.l`, `muls.l`). Accepted: BasiliskII emulates 68020; targets Mac II/SE30/Quadra class.
+- [x] **Scope decision:** 68020+ output accepted. PCC emits `extb.l`, `muls.l`, etc.; BasiliskII emulates 68020 by default, so Mac II / SE30 / Quadra class is the target. 68000-only Macs (128K, Plus, Classic) are out of scope. See `CONTRIBUTING.md` Key decisions.
 - [x] Retro68 Elf2Mac produces a MacBinary from the linked ELF ✅
 - [x] MacBinary passes structural and patcher validation (type APPL, non-empty resource fork, HFS round-trip) ✅
-- [ ] Full manual browser boot verification in BasiliskII remains human/manual (not CI-automated)
+- [ ] Full manual browser boot verification in BasiliskII — the *real* exit gate, still pending. Tracked as part of issue #3.
 
 Deliverable: a shell script (`spike/run-spike.sh`) that compiles `hello.c` through the complete PCC → ELF → MacBinary pipeline, using pre-compiled Retro68 stubs. Failure is a valuable result — it identifies which risk row materialised.
 
-### Phase 1 — Core WASM module (not started)
+### `wasm-phase1` — Core WASM module (not started)
+
+> Issue #1 refers to this as "Phase 3 browser-native compiler/linker integration."
+> Issue #3 tracks the sub-spikes (ccom→Emscripten, decoupling Object.cc from
+> the Elf2Mac/ld wrapper, m68k linker → WASM strategy) that need to land before
+> this phase can be costed.
 
 - PCC compiled to WASM via Emscripten
 - Emscripten MEMFS for source file I/O
@@ -166,7 +184,7 @@ Deliverable: a shell script (`spike/run-spike.sh`) that compiles `hello.c` throu
 - MacBinary output writer (produces `.bin` with both code + resource forks)
 - JS wrapper API (see below)
 
-### Phase 2 — Integration + hardening (not started)
+### `wasm-phase2` — Integration + hardening (not started)
 
 - Structured diagnostic output (file, line, column, severity) — same shape as the `Diagnostic` type in classic-vibe-mac
 - Bundle size optimisation (strip PCC, tree-shake headers)
@@ -174,12 +192,15 @@ Deliverable: a shell script (`spike/run-spike.sh`) that compiles `hello.c` throu
 - Integration with classic-vibe-mac playground (lazy-loaded, same pattern as `wasm-rez`)
 - End-to-end test: compile the Hello Mac sample project in-browser, verify it boots in the emulator
 
-### Phase 3 — Polish (ongoing)
+### Polish (after `wasm-phase2` ships)
 
 - Basic `-O1` optimisation
 - C99 support validation
 - More SDK headers (QuickDraw, Dialogs, TextEdit)
 - Source maps / better error messages
+
+(This was previously labelled "Phase 3" — renamed to avoid colliding with
+issue #1's "Phase 3 = browser-native compiler" usage.)
 
 ---
 

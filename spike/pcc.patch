@@ -1,0 +1,66 @@
+# spike/pcc.patch — source patches required to build PCC for m68k cross-compilation
+#
+# Apply with:  patch -p1 < ../pcc.patch    (from inside the PCC clone)
+# Or:          git -C "${PCC_SRC}" apply "${SPIKE_DIR}/pcc.patch"
+#
+# Generated against IanHarvey/pcc commit 05a6d549952fe7a401b30e87b6df907f6c0a4e88.
+#
+# Two patches are bundled:
+#
+# (1) arch/m68k/local.c — replace `(union flt *)` casts with `(struct flt *)`.
+#     pass1.h declares `struct flt` (a struct, not a union); the m68k backend's
+#     ninval() uses the wrong tag and GCC rejects with "flt defined as wrong
+#     kind of tag". This is a PCC m68k bug, present regardless of --disable-nativefp.
+#
+# (2) arch/m68k/macdefs.h — append USE_IEEEFP_32 / 64 / X80 defines.
+#     common/softfloat.c requires these macros to select IEEE float formats.
+#     The i386 and amd64 backends define all three; m68k never did. Without
+#     them, softfloat.c fails to compile. Classic Mac uses IEEE 32/64 for
+#     float/double; long double maps to SANE 80-bit extended (USE_IEEEFP_X80
+#     is the closest match — see LEARNINGS.md "softfloat USE_IEEEFP_X80" for
+#     the long-double-storage caveat tracked separately).
+#
+# A third patch — `-fcommon` injected into cc/ccom/Makefile — is NOT in this
+# file because it patches generated configure output, not source. It is
+# applied in run-spike.sh after `./configure` has run.
+
+--- a/arch/m68k/local.c
++++ b/arch/m68k/local.c
+@@ -399,7 +399,7 @@
+ 	switch (p->n_type) {
+ 	case LDOUBLE:
+ 		u.i[2] = 0;
+-		u.l = (long double)((union flt *)p->n_dcon)->fp;
++		u.l = (long double)((struct flt *)p->n_dcon)->fp;
+ #if defined(HOST_LITTLE_ENDIAN)
+ 		/* XXX probably broken on most hosts */
+ 		printf("\t.long\t0x%x,0x%x,0x%x\n", u.i[2], u.i[1], u.i[0]);
+@@ -408,7 +408,7 @@
+ #endif
+ 		break;
+ 	case DOUBLE:
+-		u.d = (double)((union flt *)p->n_dcon)->fp;
++		u.d = (double)((struct flt *)p->n_dcon)->fp;
+ #if defined(HOST_LITTLE_ENDIAN)
+ 		printf("\t.long\t0x%x,0x%x\n", u.i[1], u.i[0]);
+ #else
+@@ -416,7 +416,7 @@
+ #endif
+ 		break;
+ 	case FLOAT:
+-		u.f = (float)((union flt *)p->n_dcon)->fp;
++		u.f = (float)((struct flt *)p->n_dcon)->fp;
+ 		printf("\t.long\t0x%x\n", u.i[0]);
+ 		break;
+
+--- a/arch/m68k/macdefs.h
++++ b/arch/m68k/macdefs.h
+@@ -249,3 +249,8 @@
+ int targarg(char *w, void *arg);
+ #define XASM_TARGARG(w, ary) (w[1] == 'b' ? w++, 0 : targarg(w, ary))
+
++
++/* floating point definitions (required by softfloat.c) */
++#define USE_IEEEFP_32
++#define USE_IEEEFP_64
++#define USE_IEEEFP_X80

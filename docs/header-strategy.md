@@ -26,7 +26,10 @@ Replace the A-trap headers with plain `extern` declarations PCC can parse.**
 > OS-level stubs (GESTALT, DELAY, etc.). It does **not** contain QuickDraw, Window
 > Manager, Event Manager, or other high-level Toolbox functions. We therefore build
 > `libtoolbox-stubs.a` — hand-assembled stubs that accept C-cdecl calls and execute
-> the appropriate A-trap.
+> the appropriate A-trap. `libtoolbox-stubs.a` is therefore the **sole provider**
+> of those Toolbox symbols at link time, not a shadow of Interface's versions.
+> Interface still resolves the OS-level traps that `libretrocrt`'s `syscalls.c`
+> needs (FSWRITE, FSREAD, etc.).
 
 ```c
 /* Shim header — no A-trap syntax */
