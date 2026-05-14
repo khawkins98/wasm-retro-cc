@@ -154,16 +154,33 @@ jobs:
       - name: Phase 2 — Validate toolbox MacBinary format
         run: bash spike/run-spike.sh verify-toolbox
 
+      # Bisect probe: hello_initgraf.c calls just InitGraf and returns.
+      # Same compile + link path as hello_toolbox.  Used to localise the
+      # type-3/CHK crash between hello.c (no Toolbox, works) and
+      # hello_toolbox.c (full sequence, crashes).
+      - name: Bisect — Compile hello_initgraf.c
+        run: bash spike/run-spike.sh compile-initgraf
+
+      - name: Bisect — Link hello_initgraf.bin
+        run: bash spike/run-spike.sh link-initgraf
+
+      - name: Bisect — Validate hello_initgraf MacBinary
+        run: bash spike/run-spike.sh verify-initgraf
+
       - name: Upload toolbox artifact (MacBinary + intermediates)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: phase2-macbinary-toolbox
           # Bundle .o + .s alongside the .bin so reloc-format debugging
-          # doesn't require a fresh CI run.
+          # doesn't require a fresh CI run.  Includes the hello_initgraf
+          # bisect probe so it can be vendored without re-running CI.
           path: |
             spike/build/hello_toolbox.bin
             spike/build/hello_toolbox.o
             spike/build/hello_toolbox.s
+            spike/build/hello_initgraf.bin
+            spike/build/hello_initgraf.o
+            spike/build/hello_initgraf.s
             spike/build/libtoolbox-stubs.o
           if-no-files-found: ignore
