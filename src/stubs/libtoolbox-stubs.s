@@ -98,50 +98,64 @@ DrawString:
 	subql	#4, %sp
 	jmp	%a0@
 
-/* -- 2-arg (two 2-byte INTEGER) void trap: MoveTo -----------------------
- * MoveTo(h, v) -- C cdecl right-to-left push: v pushed first (deepest), h on top.
- * At stub entry: %sp -> [ret_to_PCC] [h (2B)] [v (2B)]
- * After popping ret addr: %sp -> [h (2B)] [v (2B)]  (h at top, v below)
+/* -- 2-arg (two SHORT) void trap: MoveTo --------------------------------
  *
- * Pascal left-to-right: h pushed first (deepest), v pushed last (on top).
- * ROM expects: %sp -> [v (2B)] [h (2B)]  (v at top, h below)
+ * 2026-05-14 correction: PCC's m68k codegen pushes `short` arguments as
+ * 4-byte longwords (`movel #100, %sp@-`), not 2-byte words.  Empirically
+ * confirmed against PCC's emitted .s.  The earlier draft of this stub
+ * assumed 2-byte short args, which read the WRONG half of each 4-byte
+ * slot — MoveTo(100, 100) ended up calling ROM with (h=0, v=100).
  *
- * C has h at top, Pascal wants v at top -> must swap the two 16-bit words.
- * ROM cleans 4 bytes (callee-clean); PCC cleans 4 bytes -> push 4 back. */
+ * Stack at stub entry (PCC pushed v=4B, then h=4B, then JSR=4B ret):
+ *   %sp+0..3 : ret_addr (4B)
+ *   %sp+4..7 : h_long  (4B, real h in low word at sp+6..7)
+ *   %sp+8..11: v_long  (4B, real v in low word at sp+10..11)
+ *
+ * MoveTo is Pascal/Toolbox callee-clean: ROM cleans its 4 bytes of args.
+ * PCC then does add.l #8, %sp to clean its 8-byte push.  Stub must
+ * arrange for total SP delta across the call to be 0. */
 
 	.globl MoveTo
 MoveTo:
 	/* void MoveTo(short h, short v)  trap 0xA893 */
-	movl	%sp@+, %a0	/* pop ret addr; %sp -> [h (2B)] [v (2B)] */
-	movw	%sp@, %d0	/* save h (word at sp+0) */
-	movw	%sp@(2), %d1	/* save v (word at sp+2) */
-	movw	%d1, %sp@	/* put v at top (Pascal wants v on top) */
-	movw	%d0, %sp@(2)	/* put h below (Pascal wants h below v) */
+	movl	%sp@+, %a0	/* pop ret addr; %sp -> [h_long][v_long] (8B) */
+	movw	%sp@(2), %d0	/* D0.w = real h (low word of h_long) */
+	movw	%sp@(6), %d1	/* D1.w = real v (low word of v_long) */
+	movw	%d1, %sp@	/* write v as a word at sp+0 (Pascal: v on top) */
+	movw	%d0, %sp@(2)	/* write h as a word at sp+2 (Pascal: h below) */
+	/* %sp -> [v_short][h_short][v_long_4B] — ROM will consume first 4B */
 	.word	0xA893		/* ROM reads v (top), h (below), cleans 4 bytes */
-	subql	#4, %sp		/* restore 4 bytes for PCC cleanup */
+	/* After ROM: %sp advanced by 4 -> points at remnant of v_long (4B). */
+	/* PCC will add.l #8 to %sp after we return; for balance we must leave
+	 * SP 8 bytes BELOW the pre-stub-entry post-pop point.  We popped 4
+	 * (ret), ROM cleaned 4 -> net -4 from post-pop, so SP is 4 above where
+	 * we need to be.  subq.l #4 brings it back. */
+	subql	#4, %sp
 	jmp	%a0@
 
-/* -- FlushEvents: register-based (D0-packed) ----------------------------
- * Both 16-bit args are packed into D0: D0[31:16]=stopmask, D0[15:0]=evmask.
+/* -- FlushEvents: register-based (D0-packed), PCC 4-byte arg slots ------
  *
- * C cdecl for FlushEvents(short evmask, short stopmask):
- *   Right-to-left push: stopmask pushed first (deepest), evmask pushed last.
- *   %sp -> [ret_to_PCC] [evmask (2B)] [stopmask (2B)]
- *   sp+4 = evmask (high 16 bits), sp+6 = stopmask (low 16 bits) when read as long.
- *   movl %sp@(4), %d0  ->  D0[31:16]=evmask, D0[15:0]=stopmask  (wrong order)
- *   swap %d0           ->  D0[31:16]=stopmask, D0[15:0]=evmask  (correct for ROM)
+ * 2026-05-14 correction: same root cause as MoveTo.  PCC pushes the two
+ * `short` args as 4-byte longwords; previous version of this stub read
+ * sp@(4) as a longword and tried to swap halves to repack — which would
+ * have been correct ONLY if PCC pushed 2-byte shorts.  Empirically:
  *
- * Register-based: ROM reads D0 only, no stack args consumed.
- * Simple RTS without popping ret -- PCC cleans the 4 bytes of stack args normally. */
+ *   PCC emits:  movel #stopmask, %sp@-;  movel #evmask, %sp@-;  jsr ...
+ *   Stack: %sp+0..3 = ret, %sp+4..7 = evmask_long, %sp+8..11 = stopmask_long
+ *   Real evmask in low word (sp+6..7); real stopmask in low word (sp+10..11)
+ *
+ * ROM expects D0[31:16]=stopmask, D0[15:0]=evmask.  Build that by
+ * reading each low word and assembling D0 explicitly. */
 
 	.globl FlushEvents
 FlushEvents:
 	/* void FlushEvents(short evmask, short stopmask)  trap 0xA032 */
-	/* %sp -> [ret] [evmask (2B)] [stopmask (2B)] */
-	movl	%sp@(4), %d0	/* D0[31:16]=evmask, D0[15:0]=stopmask */
-	swap	%d0		/* D0[31:16]=stopmask, D0[15:0]=evmask (ROM order) */
-	.word	0xA032		/* FlushEvents: reads D0, no stack delta */
-	rts			/* return; PCC does addq.l #4 to clean args */
+	moveq	#0, %d0		/* clear D0 */
+	movw	%sp@(10), %d0	/* D0[15:0] = stopmask, D0[31:16] still 0 */
+	swap	%d0		/* D0[31:16] = stopmask, D0[15:0] = 0 */
+	movw	%sp@(6), %d0	/* D0[15:0] = evmask  (high half unchanged) */
+	.word	0xA032		/* FlushEvents: reads D0; no stack delta */
+	rts			/* PCC does add.l #8 to clean its 2×4B args */
 
 /* -- Button: no args, returns Boolean in D0 -----------------------------
  * Stack at entry: %sp -> [ret_to_PCC]
