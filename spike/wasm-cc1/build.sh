@@ -220,6 +220,17 @@ SITE
 
     echo '[stage2] building cc1 with emmake (sub-makes inherit CONFIG_SITE)'
     export CONFIG_SITE=/spike/build/stage2/config.site
+
+    # First: build all the prereq libraries (libiberty/libcpp/etc) via
+    # all-gcc up to but stopping at the GCC subdir. Then build just
+    # cc1 inside gcc/ — this skips gcov-tool, lto1, collect2 et al
+    # whose link phases pull in POSIX symbols (ftw, etc.) that
+    # emscripten lacks. cc1 is the only artefact Phase 2.1 targets.
+    #
+    # We run all-libiberty, all-libcpp, etc. first as separate targets
+    # rather than \`make cc1\` from clean, because make all-gcc -j was
+    # mid-flight when gcov-tool failed; some intermediate state may
+    # be inconsistent. Building each lib explicitly ensures order.
     # Emscripten link flags for the final cc1.mjs:
     #   - ALLOW_MEMORY_GROWTH=1     GC heap can grow
     #   - MAXIMUM_MEMORY=1GB        cap below wasm32 2 GB ceiling
@@ -231,7 +242,11 @@ SITE
     #   - EXPORTED_RUNTIME=FS,…     MEMFS access + readable ERRNO_CODES
     #                               (else every MEMFS bug is numeric)
     export LDFLAGS=\"-sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=1GB -sSUPPORT_LONGJMP=wasm -sLLD_REPORT_UNDEFINED=1 -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORTED_FUNCTIONS=_main,_malloc,_free -sEXPORTED_RUNTIME_METHODS=FS,ERRNO_CODES,allocateUTF8,callMain -o cc1.mjs\"
-    emmake make all-gcc -j\"\$(nproc)\" 2>&1 | tee build.log | tail -50
+
+    # Build cc1 specifically. The makefile target is just \"cc1\" — the
+    # \$(exeext) suffix is empty for our config so we don't need cc1.mjs
+    # as the target name. emmake propagates LDFLAGS into the link.
+    emmake make -C gcc cc1 -j\"\$(nproc)\" 2>&1 | tee build.log | tail -50
 
     echo '[stage2] outputs:'
     ls -lh gcc/cc1.mjs gcc/cc1.wasm 2>/dev/null || echo '(cc1.mjs/wasm not produced — see build.log)'
