@@ -306,12 +306,82 @@ cmd_clean() {
   rm -rf "${BUILD_DIR}"
 }
 
+# ── Relink: produce cc1.mjs with proper Emscripten wasm flags ─────
+# GCC's Makefile builds cc1 with `emcc -o cc1` — emcc treats no-extension
+# output as Emscripten's classic non-modularized JS + cc1.wasm. Our
+# LDFLAGS (MODULARIZE, EXPORT_ES6, ALLOW_MEMORY_GROWTH, etc.) do not
+# propagate through GCC's link rule. Manual smoke test of the GCC-
+# built cc1 aborted with OOM on Module init because the default 16 MB
+# initial heap can't even bootstrap GCC's globals.
+#
+# This step takes the .o files Stage 2 produced and re-links them with
+# the right wasm flags. Result: cc1.mjs (ES module loader) + cc1.wasm
+# (wasm binary, may be the same as Stage 2's depending on optimization).
+cmd_relink() {
+  if [ ! -f "${STAGE2_DIR}/gcc/cc1.wasm" ]; then
+    echo "relink needs stage2 outputs — run 'stage2' first" >&2
+    exit 1
+  fi
+
+  echo "[relink] producing cc1.mjs with wasm-aware Emscripten flags"
+  run_in_container "
+    set -euo pipefail
+    cd /spike/build/stage2/gcc
+
+    # Same object-file list as the cc1 link rule in gcc/Makefile.in.
+    # If the makefile changes, this list needs to track it — we accept
+    # that brittleness as the price for getting the wasm flags right.
+    em++ -Os -g0 \\
+      -sALLOW_MEMORY_GROWTH=1 \\
+      -sMAXIMUM_MEMORY=1GB \\
+      -sINITIAL_MEMORY=128MB \\
+      -sSUPPORT_LONGJMP=wasm \\
+      -sLLD_REPORT_UNDEFINED=1 \\
+      -sMODULARIZE=1 \\
+      -sEXPORT_ES6=1 \\
+      -sEXPORT_NAME=createCC1 \\
+      -sEXPORTED_FUNCTIONS=_main,_malloc,_free \\
+      -sEXPORTED_RUNTIME_METHODS=FS,ERRNO_CODES,allocateUTF8,callMain \\
+      -o cc1.mjs \\
+      c/c-lang.o c-family/stub-objc.o attribs.o c/c-errors.o c/c-decl.o \\
+      c/c-typeck.o c/c-convert.o c/c-aux-info.o c/c-objc-common.o \\
+      c/c-parser.o c/c-fold.o c/gimple-parser.o c-family/c-common.o \\
+      c-family/c-cppbuiltin.o c-family/c-dump.o c-family/c-format.o \\
+      c-family/c-gimplify.o c-family/c-indentation.o c-family/c-lex.o \\
+      c-family/c-omp.o c-family/c-opts.o c-family/c-pch.o \\
+      c-family/c-ppoutput.o c-family/c-pragma.o c-family/c-pretty-print.o \\
+      c-family/c-semantics.o c-family/c-ada-spec.o c-family/c-ubsan.o \\
+      c-family/known-headers.o c-family/c-attribs.o c-family/c-warn.o \\
+      c-family/c-spellcheck.o m68k-mac-pragmas.o default-c.o \\
+      cc1-checksum.o libbackend.a main.o libcommon-target.a libcommon.a \\
+      ../libcpp/libcpp.a ../libdecnumber/libdecnumber.a \\
+      ../libbacktrace/.libs/libbacktrace.a ../libiberty/libiberty.a \\
+      -L/spike/build/stage2/./gmp/.libs \\
+      -L/spike/build/stage2/./mpfr/src/.libs \\
+      -L/spike/build/stage2/./mpc/src/.libs \\
+      -lmpc -lmpfr -lgmp \\
+      -L./../zlib -lz 2>&1 | tail -30
+  "
+
+  if [ -f "${STAGE2_DIR}/gcc/cc1.mjs" ]; then
+    shasum -a 256 "${STAGE2_DIR}/gcc/cc1.wasm" | tee "${STAGE2_DIR}/gcc/cc1.sha"
+    echo "[relink] cc1.mjs + cc1.wasm built:"
+    ls -lh "${STAGE2_DIR}/gcc/cc1.mjs" "${STAGE2_DIR}/gcc/cc1.wasm"
+    echo "[relink] brotli size:"
+    brotli -k -f "${STAGE2_DIR}/gcc/cc1.wasm" && ls -lh "${STAGE2_DIR}/gcc/cc1.wasm.br"
+  else
+    echo "[relink] FAIL: cc1.mjs not produced"
+    exit 1
+  fi
+}
+
 case "${1:-all}" in
   image)  cmd_image ;;
   stage1) cmd_stage1 ;;
   stage2) cmd_stage2 ;;
+  relink) cmd_relink ;;
   smoke)  cmd_smoke ;;
   clean)  cmd_clean ;;
-  all)    cmd_image && cmd_stage1 && cmd_stage2 && cmd_smoke ;;
-  *) echo "usage: $0 [image|stage1|stage2|smoke|clean|all]" >&2; exit 2 ;;
+  all)    cmd_image && cmd_stage1 && cmd_stage2 && cmd_relink && cmd_smoke ;;
+  *) echo "usage: $0 [image|stage1|stage2|relink|smoke|clean|all]" >&2; exit 2 ;;
 esac

@@ -1550,3 +1550,85 @@ are those emscripten *declares* but doesn't *link* — that's the
 conflict-on-compile failure mode. Look for the error pattern `conflicting
 types for 'X'` and add `ac_cv_func_X=yes` to config.site, not all "no"
 answers from configure.
+
+
+---
+
+## Phase 2.1 — cc1.wasm produced and smoke-tested (2026-05-14, complete)
+
+**Status: derisk passed.** `cc1.wasm` (12 MB raw, 3.3 MB brotli) +
+`cc1.mjs` (142 KB ES module loader) loads in Node, instantiates the
+runtime, and `callMain(['--help'])` prints full GCC option help with
+language-specific sections for C, C++, Ada, D — proof that GCC's
+option machinery is structurally intact in the wasm port.
+
+### The full iteration trail (8 rounds)
+
+| # | Failure | Fix |
+| --- | --- | --- |
+| 1 | Image build: `git checkout v2024.10.1` — tag doesn't exist | Pin Retro68 by master SHA (`83b9c8d2`) |
+| 2 | Stage 2 configure: "Building GCC requires GMP/MPFR/MPC" | Run `contrib/download_prerequisites` in build.sh |
+| 3 | libiberty/strsignal.c: "conflicting types for 'psignal'" | Seed `ac_cv_func_psignal=yes` in config.cache |
+| 4 | Same psignal error returns | `--cache-file` doesn't propagate to sub-configures; switch to `CONFIG_SITE` env var |
+| 5 | mpfr/config.sub: "wasm32-unknown-emscripten not recognized" | Copy GCC tree's newer config.sub/config.guess over GMP/MPFR/MPC/ISL bundled copies |
+| 6 | `make -C gcc cc1` fails — gcc subdir Makefile doesn't exist yet | Use `make all-gcc -k` (parent makefile generates child) |
+| 7 | cc1.wasm built (58 MB) but `wasm-emscripten-finalize` SIGKILL'd | Docker has 7.75 GB; finalize on huge wasm needs 10+ GB; compile with `-Os -g0` for smaller artifacts |
+| 8 | cc1.wasm built (12 MB) but loaded with `Aborted(OOM)` — GCC makefile bypasses our LDFLAGS | Add `cmd_relink` step: re-link the existing .o files with proper `-sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=128MB -sMODULARIZE=1 -sEXPORT_ES6=1` flags, output to `cc1.mjs` |
+
+### Final artefacts
+
+- `spike/wasm-cc1/build/stage2/gcc/cc1.wasm` — 12,029,672 bytes
+  - SHA-256: `39ad0f27aa171f3fd627eded7df1387974c97570356f360271bebd2ce67b7603`
+  - brotli (`-k`): 3.3 MB — squarely in the predicted target band (3-5 MB)
+- `spike/wasm-cc1/build/stage2/gcc/cc1.mjs` — 142 KB
+  - ES module, factory function default-exported as `createCC1`
+
+### What this means for the rest of Phase 2
+
+The central GCC-to-WASM bet **works**. Remaining sub-spikes are smaller,
+not fundamentally riskier:
+
+- **Phase 2.1.x — MEMFS pipe-through.** Real `.c` source in via MEMFS,
+  invoke `cc1 -quiet -O0 input.c -o output.s` from JS, fetch `output.s`
+  out of MEMFS. The infrastructure (`FS` runtime method, `allocateUTF8`,
+  `callMain`) is already wired in via the relink step. Estimated effort:
+  a few hours of plumbing + tests.
+- **Phase 2.2 — `as` (binutils assembler).** Smaller binary, same
+  pattern. Most of the autoconf/landmine knowledge from this phase
+  transfers directly. Some new ones likely (binutils has more BFD/IO
+  surface than cc1).
+- **Phase 2.3 — `ld` + Elf2Mac.** Same pattern again. Elf2Mac is
+  small, custom C++ — likely to need less autoconf shenanigans than
+  binutils proper.
+
+### Lessons that generalise beyond GCC
+
+1. **`CONFIG_SITE`, not `--cache-file`.** This is the autoconf-blessed
+   way to inject answers across recursive builds. The pattern recurs in
+   any project that has sub-configures (libtool, m4, libiberty).
+2. **`-Os -g0` at link time has memory implications.** A factor-of-5
+   wasm size reduction made the difference between OOM and success on
+   `wasm-emscripten-finalize`. Bigger Emscripten projects should plan
+   for this.
+3. **GCC's makefile ignores `LDFLAGS` for its own targets.** It uses
+   `LINKER` / `LINK_OPTS` / various internal vars. The cleanest pattern
+   is to (a) let GCC build the .o files with whatever flags it wants,
+   then (b) manually re-link with the wasm flags we control. The relink
+   step in `build.sh` codifies this.
+4. **Pre-built downstream tools (`gcov-tool`, `collect2`, `lto-wrapper`)
+   pull in POSIX symbols emscripten lacks.** Use `make -k` so their
+   failure doesn't stop `cc1`'s link.
+5. **Build-from-scratch iteration is too slow.** Each `rm -rf stage2`
+   meant ~15 min of recompile. Future Phase 2.x work should preserve
+   `.o` files across iterations and only rebuild what changed.
+
+### Files
+
+- `spike/wasm-cc1/build.sh` — the orchestrator with all 8 iterations
+  baked in (image / stage1 / stage2 / relink / smoke)
+- `spike/wasm-cc1/Dockerfile` — pinned Emscripten 3.1.61 +
+  Retro68 master commit `83b9c8d2` + Ubuntu 22.04 build deps
+- `spike/wasm-cc1/README.md` — the design-decisions-and-landmines
+  document. Phase 2.1 entries here are now history, but the
+  document's structure (decisions / landmines / file index) is
+  the template for Phase 2.2 and beyond.
