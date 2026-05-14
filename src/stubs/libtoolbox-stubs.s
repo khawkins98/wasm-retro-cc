@@ -184,3 +184,28 @@ NewWindow:
 	 * Returns NULL (%a0 = 0). */
 	subal	%a0, %a0	/* %a0 = NULL (Mac uses %a0 for pointer returns) */
 	rts
+
+/* -- Memory Manager init traps (added 2026-05-14 for H2 probe) ----------
+ * Standard Mac apps call these at startup BEFORE InitGraf to expand the
+ * application heap and pre-allocate master pointers.  hello_toolbox.c
+ * skips them on the assumption that the System sets up a default heap
+ * good enough for a trivial app -- but that may be the bug causing
+ * InitGraf's internal allocation to trip.
+ *
+ * MaxApplZone (trap $A063): expand application heap to its max.  No args.
+ *   Bit 11=0 (OS trap), bit 9=0 (no A0 preserve), bit 8=0.  Trashes A0-A2,
+ *   D0-D2.  Our stub doesn't use any of those across the call, so the
+ *   register conventions are irrelevant for us.
+ * MoreMasters (trap $A036): allocate another master pointer block.  No
+ *   args, no return.  Same convention as MaxApplZone.
+ */
+
+	.globl MaxApplZone
+MaxApplZone:
+	.word	0xA063		/* _MaxApplZone */
+	rts
+
+	.globl MoreMasters
+MoreMasters:
+	.word	0xA036		/* _MoreMasters */
+	rts

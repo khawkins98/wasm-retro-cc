@@ -180,6 +180,17 @@ jobs:
       - name: H1 probe — Validate MacBinary
         run: bash spike/run-spike.sh verify-initgraf-local
 
+      # H2 probe: hello_initgraf_zone.c calls MaxApplZone + MoreMasters x3
+      # before InitGraf.  Tests whether the bug is heap init.
+      - name: H2 probe — Compile hello_initgraf_zone.c
+        run: bash spike/run-spike.sh compile-initgraf-zone
+
+      - name: H2 probe — Link hello_initgraf_zone.bin
+        run: bash spike/run-spike.sh link-initgraf-zone
+
+      - name: H2 probe — Validate MacBinary
+        run: bash spike/run-spike.sh verify-initgraf-zone
+
       # Reloc-dump diagnostic on hello_initgraf_local.o for comparison
       # with hello_initgraf.o.  Different bases for the InitGraf arg's
       # relocation entry (bss vs none) tell us whether PCC computed the
@@ -210,5 +221,8 @@ jobs:
             spike/build/hello_initgraf_local.bin
             spike/build/hello_initgraf_local.o
             spike/build/hello_initgraf_local.s
+            spike/build/hello_initgraf_zone.bin
+            spike/build/hello_initgraf_zone.o
+            spike/build/hello_initgraf_zone.s
             spike/build/libtoolbox-stubs.o
           if-no-files-found: ignore
