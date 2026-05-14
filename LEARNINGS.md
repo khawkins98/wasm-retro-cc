@@ -294,9 +294,14 @@ The m68k backend generates instructions not available on 68000-class CPUs:
 
 **Impact:** Binaries compiled with PCC will not run on Mac 128K/512K/Plus/SE/Classic
 (which have a 68000). They will work on Mac II, IIx, IIcx, IIci, SE/30, Quadra, etc.
-(68020/030/040). For Phase 0 this is acceptable if classic-vibe-mac emulates 68020+
-(BasiliskII emulates 68020 by default). For Phase 1, evaluate GCC or a patched PCC
-with `-m68000` if 68000 targets are required.
+(68020/030/040).
+
+**Verified 2026-05-14:** classic-vibe-mac actually runs **Mini vMac** emulating a
+**Mac Plus (68000)**, not BasiliskII as earlier drafts of this file and the README
+assumed. PCC binaries hit type 3 (illegal instruction) on first 68020+ opcode.
+The compiler pipeline is correct; the emulator pairing is wrong. Resolution:
+swap classic-vibe-mac to BasiliskII (68020/030/040). See "Boot test (2026-05-14)"
+section below for the full reproduction and decision record.
 
 ### PCC output format (section directives)
 
@@ -657,7 +662,7 @@ the real ld. You CANNOT feed it a pre-linked ELF. Feed it object files + library
       (`extb.l`, `muls.l`, etc.). Acceptable for Phase 0 if classic-vibe-mac emulates 68020+.
 - [x] What goes in data fork vs resource fork? **RESOURCE fork has ALL code.** Data fork ≈ 20 bytes.
 - [x] What is `MoreMasters()`? Added to `Memory.h`. Allocates master pointer block.
-- [x] Does `classic-vibe-mac` load MacBinary directly? **NO** — HFS patcher → disk image → BasiliskII.
+- [x] Does `classic-vibe-mac` load MacBinary directly? **NO** — HFS patcher → disk image → Mini vMac (today) / BasiliskII (after the planned swap).
 - [x] Does PCC's `local.c` compile? Fixed by patching `union flt` → `struct flt`.
 - [x] Does `crt0.o` exist in Retro68 lib dir? **NO** — startup is in `libretrocrt.a` (`_start` symbol).
 - [x] Are Toolbox stubs in `libInterface.a`? **NO** — inline A-traps in Retro68 headers; we need our own stubs.
@@ -669,7 +674,7 @@ the real ld. You CANNOT feed it a pre-linked ELF. Feed it object files + library
       register-based (D0-packed), NewWindow is complex (8 args, Phase 2 TODO).
 - [ ] Does Elf2Mac's --mac-single produce MacBinary that boots in classic-vibe-mac? (Phase 1 gate)
 - [ ] Does the resulting MacBinary actually boot in classic-vibe-mac? (Phase 1 gate)
-- [ ] Does classic-vibe-mac (BasiliskII) emulate 68000 or 68020+? (affects 68020-instruction concern)
+- [x] Does classic-vibe-mac emulate 68000 or 68020+? **Mini vMac, 68000 Mac Plus** (verified 2026-05-14 via type-3 reproduction). Earlier docs incorrectly assumed BasiliskII/68020. See "Boot test (2026-05-14)" section.
 
 ---
 
@@ -857,7 +862,7 @@ f  APPL/????     10988        20 May  9 15:16 hello
 ```
 
 This confirms hello.bin is structurally valid and can be loaded by the classic-vibe-mac
-emulator. Full boot verification (BasiliskII actually running the app) requires a
+emulator. Full boot verification (the emulator actually running the app) requires a
 browser with `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy`
 headers for SharedArrayBuffer support — this is a manual test step.
 
@@ -870,3 +875,95 @@ In `spike/run-spike.sh`, both `verify` and `verify-toolbox` now check:
 
 The resource fork check uses Python's `struct.unpack('>I', ...)` to read the
 big-endian uint32 at offset 87 in the MacBinary header.
+
+---
+
+## Boot test (2026-05-14) — emulator pairing fixed, BasiliskII chosen
+
+### What happened
+
+Live boot test of `hello_toolbox.bin` in classic-vibe-mac's deployed playground
+(https://khawkins98.github.io/classic-vibe-mac/, post-PR-#62) produced:
+
+```
+The application "hello_toolbox" has unexpectedly quit, because an error
+of type 3 occurred.    [OK]
+```
+
+Type 3 on Classic Mac = `dsIllInstErr` (illegal instruction). The screenshot
+also showed a "Mini vMac Boot v2" disk on the desktop — confirming the
+emulator in use.
+
+### Diagnosis
+
+The classic-vibe-mac playground runs **Mini vMac**, which by default emulates
+a **Mac Plus (68000)**. PCC's m68k backend emits 68020+ opcodes
+(`extb.l`, `muls.l`, `divs.l`, `link.l`) — these are illegal on a 68000 and
+trap with type 3 on the first one executed. This is the exact risk this file
+flagged on lines 287–297; the project assumed it away on the basis of an
+unchecked claim that "BasiliskII emulates 68020." classic-vibe-mac has never
+used BasiliskII.
+
+### What the test *did* prove (don't lose this)
+
+The failure happened during execution, after the app had already launched.
+This rules out three previously open risks:
+
+- **MacBinary structure** — fine; the disk mounted and the Finder saw the app.
+- **`SIZE -1` resource** — *not* the blocker; the Finder launched the app
+  despite Elf2Mac `--mac-single` not emitting `SIZE -1` (see line 632).
+- **Calling-convention bridges** in `libtoolbox-stubs.s` — the app got past
+  startup into Toolbox calls before crashing. (Whether *every* stub is right
+  is still untested, but the framework isn't fundamentally broken.)
+
+The crash isolates cleanly to the CPU/ISA mismatch.
+
+### Strategic decision
+
+**Swap classic-vibe-mac's emulator: Mini vMac → BasiliskII.**
+
+Rationale:
+
+- **No compiler work changes.** PCC + Elf2Mac + libtoolbox-stubs already
+  produce binaries BasiliskII can run. The 68k spike we built becomes
+  immediately useful.
+- **BasiliskII is the most JS-mature 68k browser emulator.** James Friend's
+  emscripten port powers `infinite-mac.app`'s 68k builds. Real production
+  use, not a research prototype.
+- **The same pipeline scales to Mac OS 8.1** by swapping the ROM
+  (Mac II → 68020, Quadra → 68040). No further compiler work needed.
+
+Rejected alternatives:
+
+| Option | Why not |
+|---|---|
+| Patch PCC to emit 68000-only code | Medium-large work (`arch/m68k/{table.c,local2.c}`); LEARNINGS flags this as future work, but the BasiliskII swap is cheaper and unlocks a bigger OS range. |
+| Pivot entire project to SheepShaver / PowerPC | Throws away the 68k compiler. No small browser-portable PowerPC C compiler exists; PCC has no PPC backend; LLVM-PPC is the 12–16 MB bundle we already ruled out. SheepShaver is fine as a future *viewing* target for pre-built PPC apps, not as a compile target. |
+| Add BasiliskII alongside Mini vMac as a second emulator | Wholesale new integration; defer until we know we want both. |
+
+### What this means for the repos
+
+- **`wasm-retro-cc`**: no architectural change required. PCC stays. Elf2Mac
+  stays. Stubs stay. Future work to scale to Mac OS 8.1 (add Toolbox surface,
+  test against Quadra ROM) is incremental, not a rewrite.
+- **`classic-vibe-mac`**: this is where the surgery happens. Mini vMac →
+  BasiliskII is invasive (different emscripten port, different disk image
+  templates, different ROM/System pairing, possibly a larger bundle), but
+  the overall playground architecture stays.
+- **No need to retire either repo.** PowerPC + Mac OS 8.5/9 is a separate
+  spike with its own compiler, packager, and emulator stack; that work
+  warrants a new repo if/when it's unparked. Not a today decision.
+
+### Open follow-ups
+
+- [ ] Pick a BasiliskII WASM port for classic-vibe-mac (James Friend's
+      emscripten-basilisk is the strongest candidate). Tracked in
+      `classic-vibe-mac` issue #61.
+- [ ] Decide initial ROM / System pairing: Mac II + System 7.1 (smallest
+      bundle, lowest compat surface) vs Quadra + Mac OS 8.1 (more ambitious
+      ceiling, larger images). Tracked in `classic-vibe-mac` issue #61.
+- [ ] Re-run the `hello_toolbox.bin` boot test post-swap. That becomes the
+      *real* `spike-phase2` exit gate.
+- [ ] Patched-PCC-for-68000 remains a possible future spike if classic-Mac
+      Plus targeting ever matters; not in scope while BasiliskII path works.
+
