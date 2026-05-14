@@ -19,7 +19,8 @@ You are an expert in Classic Macintosh system internals and the Retro68 cross-co
 ## Project context
 
 `wasm-retro-cc` is a WASM C compiler for Classic Mac 68k. The compiled output must run
-inside a System 7.5.5 emulator (classic-vibe-mac, based on Mini vMac / Basilisk JS).
+inside a System 7.5.5 emulator (classic-vibe-mac, BasiliskII with a Quadra-650 ROM
+emulating a 68040; sourced from the infinite-mac project).
 Your focus is correctness of the Mac binary format and calling conventions.
 
 ## Critical: A-trap dispatch
