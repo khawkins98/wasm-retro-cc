@@ -1,18 +1,34 @@
 # wasm-retro-cc — Copilot Instructions
 
+> **⚠ ARCHIVED 2026-05-14 — Phase 1 (PCC) instructions.**
+> The project pivoted to Retro68 GCC → WASM. The PCC pipeline these
+> instructions reference now lives in [`spike-pcc/`](../spike-pcc/).
+> Paths like `spike/run-spike.sh` should be read as
+> `spike-pcc/run-spike.sh`. Phase 2 framing lives in
+> [`README.md`](../README.md) and [`LEARNINGS.md`](../LEARNINGS.md)
+> ("Phase 2 pivot (2026-05-14)"). New Phase 2 agent profiles will be
+> added when the first sub-spike lands; until then, read the README
+> for current direction rather than relying on this file.
+
 **Read `README.md` (PRD) and `LEARNINGS.md` before writing any code. Both are short and
 contain decisions that took significant research to reach. Relitigating them wastes time.**
 
 ---
 
-## Project status
+## Project status (as of archival)
 
-**Phase 0 — Complete.** CI run 13 passes: PCC builds from source on Ubuntu 24.04
-(GCC 13), `hello.c` compiles through the full PCC → as → ld pipeline with zero
-undefined symbols. Three PCC source patches are required — see `LEARNINGS.md`.
+**Phase 0 — Complete.** PCC builds from source on Ubuntu 24.04, `hello.c`
+compiles through the full PCC → as → ld pipeline with zero undefined
+symbols. Three PCC source patches are required — see `LEARNINGS.md`.
 
-**Phase 1 — Active.** Goal: WASM build with PCC + GNU as + GNU ld + Elf2Mac +
-libtoolbox-stubs.a; produce a real Toolbox-calling hello world MacBinary.
+**Phase 1 — Archived.** PCC + GNU as + GNU ld + Elf2Mac + libtoolbox-stubs.a
+produces a structurally-correct MacBinary that crashes on any Toolbox
+call. Three real bugs were found and fixed; the remaining failure mode
+has no clear bisect path.
+
+**Phase 2 — Active.** Port Retro68 GCC to WASM (Emception-style). See
+[issue #11](https://github.com/khawkins98/wasm-retro-cc/issues/11).
+The agent profiles below do **not** describe Phase 2 work.
 
 ---
 

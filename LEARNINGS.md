@@ -1084,3 +1084,124 @@ struct layout is mac68k-packed.  These two conventions are
 *independent* — our PCC + pack(2) shim combination is its own ABI
 blend.
 
+
+---
+
+## Phase 2 pivot (2026-05-14)
+
+### Summary
+
+After three real bugs found and fixed in the Phase 1 PCC pipeline
+(`Elf2Mac --mac-single`, `pack(2)` mismatch, 4-byte short-arg slots)
+the remaining failure mode is **"any single Toolbox call from a
+PCC + libretrocrt + libtoolbox-stubs binary destabilises the running
+system."** Same boot session, SimpleText also crashed type-3 alongside
+our app — strong evidence the bug is something earlier (libretrocrt
+startup, A5-world setup, or trap dispatch) that corrupts shared state
+for any subsequent app launch.
+
+We have no clear next bisect step. The Phase 1 work is therefore
+archived in [`spike-pcc/`](./spike-pcc/) and we pivoted to porting
+Retro68 GCC to WebAssembly.
+
+### Why PCC was attractive in the first place
+
+- ~3 MB gzipped, BSD-licensed.
+- Existing m68k backend.
+- Toolbox A-trap syntax confined to SDK headers — user code never
+  sees it. So in principle, if pre-compiled toolchain stubs handle the
+  A-traps, any C compiler can produce m68k user code that links
+  against them.
+
+### Why we left PCC
+
+Three structural reasons, beyond the immediate unsolved bug:
+
+1. **Unknown-unknowns surface.** PCC's m68k backend is rare in
+   production use. The population of remaining bugs is unbounded and
+   we have no way to estimate progress.
+2. **Each fix only changed the failure mode, not the outcome.** Three
+   fixes in, the binary still crashes on entry to any Toolbox trap.
+   The pattern (each bug found cost a sustained debugging session;
+   none flipped silent-exit → working) suggests several more bugs of
+   the same class remain.
+3. **System-wide destabilisation, not localised crash.** SimpleText
+   crashing in the same boot session points at something corrupting
+   the global system state — not a specific call's argument layout.
+   That's a hard target to bisect inside an emulator we can't
+   single-step easily.
+
+### Why Retro68 GCC → WASM
+
+- **Known-good output.** Every Retro68 sample app boots on the same
+  BasiliskII Quadra-650 we're targeting. We've already confirmed
+  `macweather.code.bin` (built by Retro68) round-trips through
+  classic-vibe-mac's HFS patcher and runs cleanly. The compiler-to-
+  emulator path is de-risked end-to-end.
+- **The Apple A-trap syntax problem disappears.** GCC parses
+  `= { 0xA913 }` natively, so the hand-written shim layer (and the
+  4-byte-vs-2-byte short-arg argument-slot bug, and the `pack(2)`
+  mismatch) all stop existing.
+- **Known-bounded effort.** [Emception](https://github.com/jprendes/emception)
+  ported Clang + LLVM to WASM and ships a working in-browser C/C++
+  compiler. Retro68 GCC is smaller than Clang/LLVM and we don't need
+  C++ initially. The work is portability + build-system grinding, not
+  bug-hunting against an unknown compiler.
+
+### Trade-off accepted
+
+The cost is bundle size: Retro68 GCC after Emscripten + stripping is
+estimated at **25–40 MB gzipped** vs PCC's ~3 MB. We lazy-load on the
+playground's Build button so first-page-load is unaffected; users who
+never compile never pay the download. classic-vibe-mac's
+in-browser-only architecture has no fallback to "just call the
+backend," so the bundle is non-negotiable — but lazy loading makes it
+acceptable.
+
+PowerPC / Mac OS 8 / SheepShaver remains a longer-term aspiration; not
+Phase 2 scope.
+
+### What carries over from Phase 1
+
+These were the genuinely-useful artefacts of the PCC spike. They are
+compiler-agnostic and reusable for Phase 2:
+
+- **LEARNINGS.md itself** (every entry above is compiler-agnostic —
+  MacBinary II structure, A-trap semantics, mac68k packing, multi-
+  segment loader behaviour, infinite-mac integration).
+- **`spike-pcc/inspect_macbinary.py`** — structural validator (CODE
+  0+1, DATA + RELA, `below_a5 > 0`). Will catch Phase 2 regressions
+  the same way it caught the `--mac-single` regression.
+- **`spike-pcc/hello*.c`** — regression corpus. Same source files
+  compile under both pipelines; Phase 2.0 vendors a Retro68 build of
+  these and confirms they boot.
+- **classic-vibe-mac integration** (`hfs-patcher.ts`,
+  `prebuilt-demo-boot.spec.ts`, the e2e test harness) — entirely
+  compiler-agnostic. Phase 2 binaries plug into the same plumbing.
+- **CI infrastructure** (pinned Retro68 image, GitHub Actions, artifact
+  retention). The Phase 1 workflow becomes manual-only; Phase 2 builds
+  on the same foundation.
+
+### What was archived
+
+Files in `spike-pcc/` are preserved verbatim with an `ARCHIVE.md` and
+banner notices on the moved design docs. The `[archived] PCC m68k
+pipeline` workflow is `workflow_dispatch`-only — it no longer auto-runs
+on push/PR. See [`spike-pcc/ARCHIVE.md`](./spike-pcc/ARCHIVE.md).
+
+### Process notes — for the next pivot
+
+- **Bisect probes paid for themselves.** `hello-bare`,
+  `hello-initgraf`, `hello-initgraf-local`, `hello-initgraf-zone` each
+  cost an hour to build but each ruled out an entire hypothesis. The
+  decision to pivot is well-evidenced because we *know* H1 (qd-pointer)
+  and H2 (heap init) are dead, not "we gave up."
+- **Diagnostic infrastructure matters more than fixes.** The
+  classic-vibe-mac SHA-log + info.txt-on-disk + Playwright harness +
+  CI readelf dumps were the only thing that let us run any iteration
+  loop at all. Build these first for Phase 2.
+- **Boot-test misdiagnosis trap.** Once during the investigation a
+  screenshot of a disk's volume label ("Mini vMac Boot v2") was
+  almost-read as the emulator's identity. The repo runs BasiliskII
+  Quadra-650, not Mini vMac. Always cross-reference what the
+  *emulator* is (read `emulator-worker.ts`, not the disk label).

@@ -1,3 +1,10 @@
+<!-- ⚠ ARCHIVED 2026-05-14 — Phase 1 (PCC) agent profile. The project
+pivoted to Retro68 GCC → WASM. This persona's `spike/...` paths now
+live under `spike-pcc/`, and its compiler-specific reasoning describes
+the archived pipeline. New Phase 2 agent profiles will replace these
+once the first sub-spike lands. See ../../README.md and ../../LEARNINGS.md
+"Phase 2 pivot (2026-05-14)". -->
+
 ---
 name: retro-mac-expert
 description: |

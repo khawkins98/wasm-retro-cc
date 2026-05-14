@@ -1,17 +1,16 @@
-name: Phase 0/1/2 spike — PCC m68k pipeline validation
+# ARCHIVED workflow — Phase 1 PCC pipeline.
+#
+# Status (2026-05-14): this validates the PCC m68k → MacBinary II build path
+# that we shipped in Phase 1. The output is structurally correct but crashes
+# on any Toolbox call at runtime (see ../spike-pcc/ARCHIVE.md and LEARNINGS.md
+# "Phase 2 pivot"). We pivoted to Retro68 GCC → WASM for Phase 2 and are no
+# longer iterating on this pipeline.
+#
+# Triggered manually only — auto-runs on push/PR are off so it doesn't burn
+# CI minutes on every unrelated commit. Kept around so the PCC build remains
+# reproducible from the source tree if anyone wants to audit it.
+name: "[archived] PCC m68k pipeline (manual)"
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'spike/**'
-      - 'src/**'
-      - '.github/workflows/spike.yml'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'spike/**'
-      - 'src/**'
-      - '.github/workflows/spike.yml'
   workflow_dispatch:
 
 jobs:
@@ -24,22 +23,22 @@ jobs:
         run: sudo apt-get install -y binutils-m68k-linux-gnu
 
       - name: Extract Retro68 stubs
-        run: bash spike/run-spike.sh setup
+        run: bash spike-pcc/run-spike.sh setup
 
       - name: List extracted stubs (diagnostic)
         run: |
           echo "=== Retro68 stubs extracted ==="
-          ls -lh spike/retro68-stubs/ || echo "(none)"
+          ls -lh spike-pcc/retro68-stubs/ || echo "(none)"
 
       - name: Build PCC (m68k target)
-        run: bash spike/run-spike.sh build-pcc
+        run: bash spike-pcc/run-spike.sh build-pcc
 
       - name: Compile hello.c with PCC
-        run: bash spike/run-spike.sh compile
+        run: bash spike-pcc/run-spike.sh compile
 
       - name: Validate — no undefined symbols
         run: |
-          UNDEF=$(m68k-linux-gnu-nm spike/build/hello.elf | grep " U " || true)
+          UNDEF=$(m68k-linux-gnu-nm spike-pcc/build/hello.elf | grep " U " || true)
           if [ -n "$UNDEF" ]; then
             echo "FAIL: undefined symbols:"
             echo "$UNDEF"
@@ -49,14 +48,11 @@ jobs:
 
       - name: Validate — check for 68020+ instructions (informational)
         run: |
-          BAD=$(m68k-linux-gnu-objdump -d spike/build/hello.elf \
+          BAD=$(m68k-linux-gnu-objdump -d spike-pcc/build/hello.elf \
                 | grep -Ei "muls\.l|mulu\.l|divs\.l|divu\.l|bfextu|bfexts|extb\.l" || true)
           if [ -n "$BAD" ]; then
             echo "NOTE: 68020+ instructions found (PCC emits these by default):"
             echo "$BAD"
-            echo "This is a known Phase 0 limitation — PCC targets 68020+ not 68000."
-            echo "For 68000 targets (Mac 128K/512K/Plus/SE/Classic), a patched PCC"
-            echo "or a different compiler backend (LLVM m68k -march=68000) is needed."
           else
             echo "PASS: no 68020+ instructions (PCC may have been constrained)"
           fi
@@ -66,7 +62,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: phase0-elf
-          path: spike/build/hello.elf
+          path: spike-pcc/build/hello.elf
           if-no-files-found: ignore
 
   phase1:
@@ -79,26 +75,26 @@ jobs:
         run: sudo apt-get install -y binutils-m68k-linux-gnu
 
       - name: Extract Retro68 stubs
-        run: bash spike/run-spike.sh setup
+        run: bash spike-pcc/run-spike.sh setup
 
       - name: Build PCC (m68k target)
-        run: bash spike/run-spike.sh build-pcc
+        run: bash spike-pcc/run-spike.sh build-pcc
 
       - name: Compile hello.c with PCC
-        run: bash spike/run-spike.sh compile
+        run: bash spike-pcc/run-spike.sh compile
 
       - name: Phase 1 — Link ELF → MacBinary via Elf2Mac
-        run: bash spike/run-spike.sh link
+        run: bash spike-pcc/run-spike.sh link
 
       - name: Phase 1 — Validate MacBinary format
-        run: bash spike/run-spike.sh verify
+        run: bash spike-pcc/run-spike.sh verify
 
       - name: Upload MacBinary artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: phase1-macbinary
-          path: spike/build/hello.bin
+          path: spike-pcc/build/hello.bin
           if-no-files-found: ignore
 
   phase2:
@@ -111,118 +107,79 @@ jobs:
         run: sudo apt-get install -y binutils-m68k-linux-gnu
 
       - name: Extract Retro68 stubs
-        run: bash spike/run-spike.sh setup
+        run: bash spike-pcc/run-spike.sh setup
 
       - name: Build PCC (m68k target)
-        run: bash spike/run-spike.sh build-pcc
+        run: bash spike-pcc/run-spike.sh build-pcc
 
       - name: Phase 2 — Assemble libtoolbox-stubs.a
-        run: bash spike/run-spike.sh build-stubs
+        run: bash spike-pcc/run-spike.sh build-stubs
 
       - name: Phase 2 — Compile hello_toolbox.c with PCC
-        run: bash spike/run-spike.sh compile-toolbox
+        run: bash spike-pcc/run-spike.sh compile-toolbox
 
-      - name: Phase 2 — Validate toolbox object (Toolbox refs should be undefined)
-        run: |
-          echo "=== Undefined symbols in hello_toolbox.o (should be Toolbox stubs) ==="
-          m68k-linux-gnu-nm spike/build/hello_toolbox.o | grep " U " || echo "(none)"
-          echo "=== Defined symbols ==="
-          m68k-linux-gnu-nm spike/build/hello_toolbox.o | grep " T " || echo "(none)"
-
-      # Diagnostic added 2026-05-14 after type-3 boot crash investigation.
-      # Elf2Mac only honors R_68K_32 (type 1) and R_68K_PC32 (type 4); every
-      # other reloc type is silently dropped (Section.cc:GetRelocations).
-      # If PCC emits any other type, those relocations are lost and the
-      # binary will crash at runtime even though the link succeeds.  Also
-      # checks REL vs RELA: if PCC emits .rel.text (no 'a'), Elf2Mac's
-      # gelf_getrela path never matches and ALL relocations vanish.
       - name: Phase 2 — Dump PCC relocation types + section table
         run: |
-          echo "=== Section headers (looking for .rela.* vs .rel.* and SHT_RELA vs SHT_REL) ==="
-          m68k-linux-gnu-readelf -S spike/build/hello_toolbox.o
+          echo "=== Section headers ==="
+          m68k-linux-gnu-readelf -S spike-pcc/build/hello_toolbox.o
           echo
-          echo "=== Relocation entries (looking for any type other than R_68K_32 / R_68K_PC32) ==="
-          m68k-linux-gnu-readelf -r spike/build/hello_toolbox.o
+          echo "=== Relocation entries ==="
+          m68k-linux-gnu-readelf -r spike-pcc/build/hello_toolbox.o
           echo
           echo "=== Relocation type histogram ==="
-          m68k-linux-gnu-readelf -r spike/build/hello_toolbox.o \
+          m68k-linux-gnu-readelf -r spike-pcc/build/hello_toolbox.o \
             | awk '/R_68K/ {print $3}' | sort | uniq -c
 
       - name: Phase 2 — Link toolbox ELF → MacBinary via Elf2Mac
-        run: bash spike/run-spike.sh link-toolbox
+        run: bash spike-pcc/run-spike.sh link-toolbox
 
       - name: Phase 2 — Validate toolbox MacBinary format
-        run: bash spike/run-spike.sh verify-toolbox
+        run: bash spike-pcc/run-spike.sh verify-toolbox
 
-      # Bisect probe: hello_initgraf.c calls just InitGraf and returns.
-      # Same compile + link path as hello_toolbox.  Used to localise the
-      # type-3/CHK crash between hello.c (no Toolbox, works) and
-      # hello_toolbox.c (full sequence, crashes).
       - name: Bisect — Compile hello_initgraf.c
-        run: bash spike/run-spike.sh compile-initgraf
+        run: bash spike-pcc/run-spike.sh compile-initgraf
 
       - name: Bisect — Link hello_initgraf.bin
-        run: bash spike/run-spike.sh link-initgraf
+        run: bash spike-pcc/run-spike.sh link-initgraf
 
       - name: Bisect — Validate hello_initgraf MacBinary
-        run: bash spike/run-spike.sh verify-initgraf
+        run: bash spike-pcc/run-spike.sh verify-initgraf
 
-      # H1 probe: hello_initgraf_local.c calls InitGraf with a stack-
-      # allocated GrafPtr instead of &qd.thePort.  Disambiguates whether
-      # the InitGraf crash is from a bad qd-pointer (H1) vs InitGraf
-      # itself misbehaving.
       - name: H1 probe — Compile hello_initgraf_local.c
-        run: bash spike/run-spike.sh compile-initgraf-local
+        run: bash spike-pcc/run-spike.sh compile-initgraf-local
 
       - name: H1 probe — Link hello_initgraf_local.bin
-        run: bash spike/run-spike.sh link-initgraf-local
+        run: bash spike-pcc/run-spike.sh link-initgraf-local
 
       - name: H1 probe — Validate MacBinary
-        run: bash spike/run-spike.sh verify-initgraf-local
+        run: bash spike-pcc/run-spike.sh verify-initgraf-local
 
-      # H2 probe: hello_initgraf_zone.c calls MaxApplZone + MoreMasters x3
-      # before InitGraf.  Tests whether the bug is heap init.
       - name: H2 probe — Compile hello_initgraf_zone.c
-        run: bash spike/run-spike.sh compile-initgraf-zone
+        run: bash spike-pcc/run-spike.sh compile-initgraf-zone
 
       - name: H2 probe — Link hello_initgraf_zone.bin
-        run: bash spike/run-spike.sh link-initgraf-zone
+        run: bash spike-pcc/run-spike.sh link-initgraf-zone
 
       - name: H2 probe — Validate MacBinary
-        run: bash spike/run-spike.sh verify-initgraf-zone
-
-      # Reloc-dump diagnostic on hello_initgraf_local.o for comparison
-      # with hello_initgraf.o.  Different bases for the InitGraf arg's
-      # relocation entry (bss vs none) tell us whether PCC computed the
-      # arg differently.
-      - name: H1 probe — Dump hello_initgraf_local relocations
-        run: |
-          echo "=== Comparison of relocations: hello_initgraf vs hello_initgraf_local ==="
-          echo "--- hello_initgraf.o ---"
-          m68k-linux-gnu-readelf -r spike/build/hello_initgraf.o | head -10
-          echo "--- hello_initgraf_local.o ---"
-          m68k-linux-gnu-readelf -r spike/build/hello_initgraf_local.o | head -10
+        run: bash spike-pcc/run-spike.sh verify-initgraf-zone
 
       - name: Upload toolbox artifact (MacBinary + intermediates)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: phase2-macbinary-toolbox
-          # Bundle .o + .s alongside the .bin so reloc-format debugging
-          # doesn't require a fresh CI run.  Includes the hello_initgraf
-          # bisect probe so it can be vendored without re-running CI.
           path: |
-            spike/build/hello_toolbox.bin
-            spike/build/hello_toolbox.o
-            spike/build/hello_toolbox.s
-            spike/build/hello_initgraf.bin
-            spike/build/hello_initgraf.o
-            spike/build/hello_initgraf.s
-            spike/build/hello_initgraf_local.bin
-            spike/build/hello_initgraf_local.o
-            spike/build/hello_initgraf_local.s
-            spike/build/hello_initgraf_zone.bin
-            spike/build/hello_initgraf_zone.o
-            spike/build/hello_initgraf_zone.s
-            spike/build/libtoolbox-stubs.o
+            spike-pcc/build/hello_toolbox.bin
+            spike-pcc/build/hello_toolbox.o
+            spike-pcc/build/hello_toolbox.s
+            spike-pcc/build/hello_initgraf.bin
+            spike-pcc/build/hello_initgraf.o
+            spike-pcc/build/hello_initgraf.s
+            spike-pcc/build/hello_initgraf_local.bin
+            spike-pcc/build/hello_initgraf_local.o
+            spike-pcc/build/hello_initgraf_local.s
+            spike-pcc/build/hello_initgraf_zone.bin
+            spike-pcc/build/hello_initgraf_zone.o
+            spike-pcc/build/hello_initgraf_zone.s
+            spike-pcc/build/libtoolbox-stubs.o
           if-no-files-found: ignore
