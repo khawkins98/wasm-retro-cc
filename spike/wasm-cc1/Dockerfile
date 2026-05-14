@@ -52,10 +52,12 @@ ENV PATH=/opt/emsdk:/opt/emsdk/upstream/emscripten:/opt/emsdk/upstream/bin:${PAT
 ENV EM_CONFIG=/opt/emsdk/.emscripten
 
 # ── Retro68 sources ────────────────────────────────────────────────
-# Pinned to the commit that produced our pinned Docker image
-# ghcr.io/autc04/retro68@sha256:e8b6cc8… — see ../README.md for why.
-# The Retro68 repo uses submodules for gcc/binutils/etc., so we recurse.
-ARG RETRO68_COMMIT=v2024.10.1
+# Pin by SHA, not tag — Retro68's only tags are 2019-era (v2019.8.*)
+# and we need a modern GCC 12.2 era source tree to match the runtime
+# image we use for Phase 2.0 (ghcr.io/autc04/retro68 @ e8b6cc8…).
+# Picked from `git ls-remote --heads` master tip at 2026-05-14.
+# The Retro68 repo uses submodules for gcc/binutils/etc.; recurse.
+ARG RETRO68_COMMIT=83b9c8d2c58f8efb0925a305aca1e0edab2e6571
 RUN git clone https://github.com/autc04/Retro68.git /Retro68 \
     && cd /Retro68 \
     && git checkout ${RETRO68_COMMIT} \
