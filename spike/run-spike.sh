@@ -471,6 +471,64 @@ cmd_verify_toolbox() {
   python3 "${SPIKE_DIR}/inspect_macbinary.py" "${BIN}"
 }
 
+# ── compile-initgraf / link-initgraf / verify-initgraf ─────────────────────
+# Bisect-probe build for hello_initgraf.c — single Toolbox call (InitGraf)
+# then return.  Used to localise the type-3/CHK crash between hello.c (no
+# Toolbox, works) and hello_toolbox.c (full Toolbox, crashes).
+# Same link recipe as hello_toolbox; differs only in the source file.
+
+cmd_compile_initgraf() {
+  echo "=== Bisect: Compiling hello_initgraf.c with PCC ccom m68k backend ==="
+  local SRC="${SPIKE_DIR}/hello_initgraf.c"
+  [ -f "${SRC}" ] || { echo "FAIL: ${SRC} not found"; exit 1; }
+
+  CCOM_BIN=$(find "${PCC_SRC}/cc/ccom" -name "*ccom" -type f 2>/dev/null | head -1)
+  [ -n "${CCOM_BIN}" ] || { echo "ERROR: ccom not found — run build-pcc"; exit 1; }
+
+  gcc -E -I "${SPIKE_DIR}/../src/include" "${SRC}" -o "${BUILD_DIR}/hello_initgraf.i" \
+    && echo "Preprocessing: OK" || { echo "Preprocessing: FAILED"; exit 1; }
+  "${CCOM_BIN}" "${BUILD_DIR}/hello_initgraf.i" "${BUILD_DIR}/hello_initgraf.s" \
+    && echo "PCC ccom: OK" || { echo "PCC ccom: FAILED"; exit 1; }
+  m68k-linux-gnu-as -m68020 "${BUILD_DIR}/hello_initgraf.s" -o "${BUILD_DIR}/hello_initgraf.o" \
+    && echo "Assembly: OK" || { echo "Assembly: FAILED"; exit 1; }
+  echo "=== hello_initgraf.o produced ==="
+  m68k-linux-gnu-nm "${BUILD_DIR}/hello_initgraf.o" | grep " [TU] " | head -10
+}
+
+cmd_link_initgraf() {
+  echo "=== Bisect: Linking hello_initgraf.o → hello_initgraf.bin ==="
+  docker run --rm \
+    -v "$(cd "${SPIKE_DIR}/.." && pwd)":/work \
+    --entrypoint /bin/bash \
+    "${RETRO68_IMAGE}" \
+    -c "
+      set -euo pipefail
+      BINDIR=/Retro68-build/toolchain/bin
+      LD_BIN=\${BINDIR}/m68k-apple-macos-ld
+      LIBDIR=/Retro68-build/toolchain/m68k-apple-macos/lib
+      GCC_LIBDIR=\$(find \${BINDIR%/bin}/lib/gcc/m68k-apple-macos -name 'libgcc.a' -type f | head -1 | xargs dirname)
+      \"\${LD_BIN}\" \
+        -elf2mac -q -undefined=_consolewrite \
+        -o /work/spike/build/hello_initgraf.bin \
+        /work/spike/build/hello_initgraf.o \
+        /work/spike/build/libtoolbox-stubs.a \
+        -L\"\${LIBDIR}\" \
+        -L\"\${GCC_LIBDIR}\" \
+        --start-group -lretrocrt -lc -lInterface -lgcc --end-group
+      echo 'Link (initgraf): OK'
+    " \
+    && echo "Bisect link: OK" \
+    || { echo "Bisect link: FAILED"; exit 1; }
+  ls -lh "${BUILD_DIR}/hello_initgraf.bin"
+}
+
+cmd_verify_initgraf() {
+  echo "=== Bisect: Validating hello_initgraf MacBinary structure ==="
+  local BIN="${BUILD_DIR}/hello_initgraf.bin"
+  [ -f "${BIN}" ] || { echo "FAIL: hello_initgraf.bin not found"; exit 1; }
+  python3 "${SPIKE_DIR}/inspect_macbinary.py" "${BIN}"
+}
+
 # ── compare ───────────────────────────────────────────────────────────────
 # NOTE: This command is NOT run in CI (spike.yml). It is provided for local
 # comparison only. It requires Docker and that 'compile' has already run.
@@ -515,15 +573,19 @@ case "${1:-all}" in
   compile-toolbox)  cmd_compile_toolbox ;;
   link-toolbox)     cmd_link_toolbox ;;
   verify-toolbox)   cmd_verify_toolbox ;;
+  compile-initgraf) cmd_compile_initgraf ;;
+  link-initgraf)    cmd_link_initgraf ;;
+  verify-initgraf)  cmd_verify_initgraf ;;
   compare)          cmd_compare ;;
   all)
     cmd_setup && cmd_build_pcc \
       && cmd_compile && cmd_link && cmd_verify \
       && cmd_build_stubs && cmd_compile_toolbox && cmd_link_toolbox && cmd_verify_toolbox \
+      && cmd_compile_initgraf && cmd_link_initgraf && cmd_verify_initgraf \
       && cmd_compare
     ;;
   *)
-    echo "Usage: $0 [setup|build-pcc|compile|link|verify|build-stubs|compile-toolbox|link-toolbox|verify-toolbox|compare|all]"
+    echo "Usage: $0 [setup|build-pcc|compile|link|verify|build-stubs|compile-toolbox|link-toolbox|verify-toolbox|compile-initgraf|link-initgraf|verify-initgraf|compare|all]"
     exit 1
     ;;
 esac
