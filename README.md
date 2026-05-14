@@ -161,10 +161,10 @@ Questions to answer:
 **`spike-phase0/1` exit criteria and results (actual):**
 - [x] PCC compiles `hello.c` to m68k assembly without errors ✅
 - [x] Assembly links against Retro68 stubs (`nm` shows no undefined symbols) ✅
-- [x] **Scope decision:** 68020+ output accepted. PCC emits `extb.l`, `muls.l`, etc.; BasiliskII emulates 68020 by default, so Mac II / SE30 / Quadra class is the target. 68000-only Macs (128K, Plus, Classic) are out of scope. See `CONTRIBUTING.md` Key decisions.
+- [x] **Scope decision:** 68020+ output accepted. PCC emits `extb.l`, `muls.l`, etc., so the target is the Mac II / SE30 / Quadra class. 68000-only Macs (128K, Plus, Classic) are out of scope. See `CONTRIBUTING.md` Key decisions.
 - [x] Retro68 Elf2Mac produces a MacBinary from the linked ELF ✅
 - [x] MacBinary passes structural and patcher validation (type APPL, non-empty resource fork, HFS round-trip) ✅
-- [ ] Full manual browser boot verification in BasiliskII — the *real* exit gate, still pending. Tracked as part of issue #3.
+- [x] **Live boot test attempted 2026-05-14:** binary throws *type 3 (illegal instruction)* under classic-vibe-mac's emulator. **Root cause:** classic-vibe-mac uses Mini vMac (68000 Mac Plus), not BasiliskII as the README previously assumed. PCC's 68020+ output is incompatible with a 68000 CPU. Compiler pipeline is correct; emulator pairing is wrong. See `LEARNINGS.md` "Boot test (2026-05-14)" for details and the strategic decision to swap to BasiliskII in classic-vibe-mac. Tracked in issue #3 and `classic-vibe-mac` issue #61.
 
 Deliverable: a shell script (`spike/run-spike.sh`) that compiles `hello.c` through the complete PCC → ELF → MacBinary pipeline, using pre-compiled Retro68 stubs. Failure is a valuable result — it identifies which risk row materialised.
 
