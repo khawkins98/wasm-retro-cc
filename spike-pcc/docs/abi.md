@@ -1,4 +1,10 @@
-# Motorola 68000 ABI Reference for wasm-retro-cc
+# Motorola 68000 ABI Reference (PCC pipeline, ARCHIVED)
+
+> **Archived 2026-05-14** with the rest of the PCC spike. Phase 2 uses
+> Retro68 GCC, which encodes the ABI itself — see [`../ARCHIVE.md`](../ARCHIVE.md).
+> Most of what's here is still factually correct (the m68k ABI doesn't
+> change), but the **PCC-specific cautions** apply only to the archived
+> pipeline.
 
 This document describes the calling conventions the shim headers and PCC must agree on.
 Any mismatch here causes silent data corruption or crashes inside the emulator.
@@ -57,7 +63,7 @@ This was discovered in Phase 0 and is **accepted** for Phase 0 and Phase 1:
 
 To inspect which 68020+ instructions PCC emits:
 ```bash
-m68k-linux-gnu-objdump -d spike/build/hello.elf \
+m68k-linux-gnu-objdump -d ../build/hello.elf \
   | grep -Ei "muls\.l|mulu\.l|divs\.l|divu\.l|extb\.l|link\.l"
 ```
 

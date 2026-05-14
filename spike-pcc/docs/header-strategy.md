@@ -1,6 +1,11 @@
-# Shim Header Strategy
+# Shim Header Strategy (PCC pipeline, ARCHIVED)
 
-This document explains the design of the shim headers in `src/include/` and the
+> **Archived 2026-05-14.** Retro68 GCC parses Apple's A-trap header
+> syntax directly, so the hand-written shim layer described here is
+> not part of Phase 2. Kept for the design notes — see
+> [`../ARCHIVE.md`](../ARCHIVE.md).
+
+This document explains the design of the shim headers in `../include/` and the
 decisions behind them.
 
 ## The Problem
@@ -73,7 +78,7 @@ without re-pushing arguments (the Mac ROM handles the call internally).
 Verify each stub for new functions you add:
 
 ```bash
-m68k-linux-gnu-objdump -d src/stubs/libtoolbox-stubs.a | grep -A 20 "_NewWindow"
+m68k-linux-gnu-objdump -d ../stubs/libtoolbox-stubs.a | grep -A 20 "_NewWindow"
 ```
 
 ## Known functions requiring special handling
@@ -112,7 +117,7 @@ converts to a null `ResumeProcPtr`.
 
 ## Header tiers
 
-**Tier 1** (required for `spike/hello.c`):
+**Tier 1** (required for `../hello.c`):
 - `Types.h` — fundamental types
 - `Quickdraw.h` — graphics primitives, including the `QDGlobals` shim layout needed for `qd.thePort`
 - `Windows.h` — window management
@@ -122,7 +127,7 @@ converts to a null `ResumeProcPtr`.
 
 **Tier 2** (needed for more complex apps):
 
-`spike/hello.c` already needs part of the standard Macintosh startup sequence from
+`../hello.c` already needs part of the standard Macintosh startup sequence from
 Tier 2: `InitMenus()`, `TEInit()`, and `InitDialogs(0L)`.
 
 - `Menus.h` — menu bar and pull-down menus (`InitMenus` for standard app startup)
@@ -142,9 +147,9 @@ Tier 2: `InitMenus()`, `TEInit()`, and `InitDialogs(0L)`.
    parameter list and types
 2. Verify the symbol will be provided by `libtoolbox-stubs.a`:
    ```bash
-   nm src/stubs/libtoolbox-stubs.a | grep FunctionName
+   nm ../stubs/libtoolbox-stubs.a | grep FunctionName
    ```
 3. Add the `extern` declaration to the appropriate shim header, using plain C types
-4. Write a test in `spike/` that calls the function and links successfully
-5. Run `spike/run-spike.sh compile` to confirm zero undefined symbols
+4. Write a test in `../` that calls the function and links successfully
+5. Run `../run-spike.sh compile` to confirm zero undefined symbols
 6. Update `LEARNINGS.md` if you discover any calling convention quirks
