@@ -1031,3 +1031,56 @@ again:
 3. **Don't infer infrastructure from screenshots.** Read the integration
    source instead.
 
+---
+
+## PCC m68k argument-passing convention (verified 2026-05-14)
+
+PCC's m68k codegen **pushes every argument as a 4-byte longword on
+the stack**, regardless of the declared C type.  This includes
+`short` / `int16_t` arguments — they're zero-extended (or
+sign-extended) to 4 bytes when pushed.
+
+Empirical proof from `hello_toolbox.s` (PCC output for `MoveTo(100, 100)`):
+
+```asm
+move.l #100,-(%sp)      ; v=100 pushed as 4 bytes
+move.l #100,-(%sp)      ; h=100 pushed as 4 bytes
+jsr 0+MoveTo
+add.l #8,%sp            ; cleanup: 2 args × 4 bytes
+```
+
+If you write a Toolbox stub that READS a `short` arg from the wrong
+offset (treating the arg slot as 2 bytes instead of 4), you get the
+HIGH zero half of the longword (or whatever was promoted from the
+caller's value) rather than the actual value.  The stack arithmetic
+ends up balanced by accident, so the bug is silent unless you observe
+the actual values delivered to ROM.
+
+### Implication for `src/stubs/libtoolbox-stubs.s`
+
+- **Stubs taking 4-byte pointer args** (InitGraf, InitDialogs, SetPort,
+  DrawString, etc.) are fine — pointer size matches the 4-byte slot.
+- **Stubs taking 16-bit short args** (MoveTo, FlushEvents at minimum)
+  must read the real value from the LOW word of each 4-byte slot:
+  `movw %sp@(2), %d0` instead of `movw %sp@, %d0` for a "first 16-bit
+  arg at sp+0".  Stack arithmetic doesn't change; only the read offsets.
+
+### Open question
+
+The Pascal calling convention spec says Pascal callers push 2-byte
+shorts as 2-byte words.  PCC is not following Pascal here — it's
+using C cdecl with 4-byte promotion.  The libtoolbox-stubs bridge has
+to handle the mismatch.  This is fine for our use case but is a thing
+to watch when adding new stubs.  If a future stub for a Toolbox call
+that takes `short` args is added, mirror the MoveTo/FlushEvents
+pattern.
+
+### Worth noting
+
+PCC's `-msoft-float` and other config knobs may change calling
+convention.  We use default config.  The Retro68 GCC for comparison
+DOES push shorts as 2-byte words when `-mshort` is in effect, but its
+struct layout is mac68k-packed.  These two conventions are
+*independent* — our PCC + pack(2) shim combination is its own ABI
+blend.
+
