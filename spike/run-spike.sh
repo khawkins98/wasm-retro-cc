@@ -171,18 +171,40 @@ cmd_compile() {
 cmd_link() {
   echo "=== Phase 1: Linking hello.o → hello.bin via Retro68 Elf2Mac ==="
 
-  # Elf2Mac is the Retro68 linker wrapper.  Calling it directly with
-  # --mac-single produces a single-segment MacBinary (CODE 0 + CODE 1,
-  # type=APPL, creator=????) without going through GCC, which has --mac-flat
-  # baked into its specs and would produce a flat code resource instead.
+  # We invoke the m68k-apple-macos-ld symlink (which points to the Elf2Mac
+  # binary) with the -elf2mac flag.  This is exactly what Retro68's GCC
+  # specs do (gcc/config/m68k/m68k-macos.h LINK_SPEC) when add_application
+  # builds a working Mac app.  The combination produces a multi-segment
+  # MacBinary APPL with CODE 0 / CODE 1..N + DATA + RELA resources and a
+  # properly-sized A5 world.
   #
-  # RETRO68_REAL_LD tells Elf2Mac where the real GNU ld lives (Elf2Mac
-  # normally finds it by appending ".real" to argv[0]).
+  # Two things matter and are easy to miss:
   #
-  # Library order: -lretrocrt first (_start + relocator), then -lc
-  # (atexit/exit referenced by libretrocrt.a start.c).  We skip -lgcc
-  # because PCC emits native 68020 instructions (muls.l, divu.l) rather
-  # than soft-math helpers.
+  # 1. argv[0] must be 'm68k-apple-macos-ld'.  Elf2Mac dispatches on argv[0]:
+  #    invoked as the symlink it acts as a transparent ld wrapper and (with
+  #    -elf2mac) generates the linker script libretrocrt needs.  Invoked
+  #    directly as 'Elf2Mac' it skips that path; the real ld then fails
+  #    with undefined references to _stext / _sdata / _sbss / __CTOR_LIST__
+  #    and friends.
+  # 2. The -elf2mac flag must be present.  Without it the ld symlink is a
+  #    pure passthrough, no linker script is generated, and the link fails
+  #    the same way.
+  #
+  # An earlier version of this spike used 'Elf2Mac --mac-single ...' directly.
+  # That mode produces a minimal single-CODE-segment binary with below_a5=0
+  # and no DATA / RELA resources, which is incompatible with libretrocrt:
+  # Retro68Relocate's non-multiseg path never calls SetCurrentA5(), so the
+  # below-A5 globals (qd, etc.) live in unallocated memory and the first
+  # Toolbox call after InitGraf hits type 3 (illegal instruction).
+  # Verified 2026-05-14 by boot-testing in classic-vibe-mac (BasiliskII
+  # Quadra-650, System 7.5.5).  Source citations:
+  # Retro68/Elf2Mac/Elf2Mac.cc:101, Object.cc:201-206, libretro/relocate.c:233-308.
+  #
+  # RETRO68_REAL_LD is no longer needed: when invoked as the symlink,
+  # m68k-apple-macos-ld finds the real ld by appending ".real" to its own
+  # path, which works automatically.
+  #
+  # Library order: see comments at the link command below.
 
   docker run --rm \
     -v "$(cd "${SPIKE_DIR}/.." && pwd)":/work \
@@ -194,22 +216,29 @@ cmd_link() {
       # Locate Elf2Mac and the real ld in the Docker image.
       # Known-good prefix from Phase 0 extraction: /Retro68-build/toolchain
       BINDIR=/Retro68-build/toolchain/bin
-      ELF2MAC=\${BINDIR}/Elf2Mac
+      # We invoke Elf2Mac via the m68k-apple-macos-ld symlink (which points to
+      # the same binary).  Elf2Mac dispatches on argv[0]: invoked as
+      # m68k-apple-macos-ld it acts as a transparent ld wrapper that, with
+      # the -elf2mac flag, generates the multi-segment linker script defining
+      # _stext / _sdata / _sbss / _ebss / __CTOR_LIST__ / __init_section / etc.
+      # libretrocrt's startup needs.  Invoked as 'Elf2Mac' it skips that path
+      # and the link fails with undefined references to those linker symbols.
+      LD_BIN=\${BINDIR}/m68k-apple-macos-ld
       REAL_LD=\${BINDIR}/m68k-apple-macos-ld.real
       LIBDIR=/Retro68-build/toolchain/m68k-apple-macos/lib
 
       # Fall back to a full search if the expected paths aren't present.
-      if [ ! -x \"\${ELF2MAC}\" ]; then
-        ELF2MAC=\$(find /usr/local -name 'Elf2Mac' -type f 2>/dev/null | head -1)
-        BINDIR=\$(dirname \"\${ELF2MAC}\")
+      if [ ! -x \"\${LD_BIN}\" ]; then
+        LD_BIN=\$(find /usr/local -name 'm68k-apple-macos-ld' -type f -o -name 'm68k-apple-macos-ld' -type l 2>/dev/null | head -1)
+        BINDIR=\$(dirname \"\${LD_BIN}\")
         REAL_LD=\${BINDIR}/m68k-apple-macos-ld.real
         LIBDIR=\$(dirname \"\${BINDIR}\")/m68k-apple-macos/lib
       fi
 
       # Fail explicitly if required paths are missing.
-      test -x \"\${ELF2MAC}\" || { echo \"FAIL: Elf2Mac not found at \${ELF2MAC}\"; exit 1; }
-      test -x \"\${REAL_LD}\"  || { echo \"FAIL: real ld not found at \${REAL_LD}\"; exit 1; }
-      test -d \"\${LIBDIR}\"   || { echo \"FAIL: lib dir not found at \${LIBDIR}\"; exit 1; }
+      test -e \"\${LD_BIN}\"  || { echo \"FAIL: m68k-apple-macos-ld not found at \${LD_BIN}\"; exit 1; }
+      test -x \"\${REAL_LD}\" || { echo \"FAIL: real ld not found at \${REAL_LD}\"; exit 1; }
+      test -d \"\${LIBDIR}\"  || { echo \"FAIL: lib dir not found at \${LIBDIR}\"; exit 1; }
 
       # libgcc.a lives in GCC's private directory (lib/gcc/<target>/<ver>/), not LIBDIR.
       # Find it dynamically to avoid hardcoding the GCC version number.
@@ -222,7 +251,7 @@ cmd_link() {
       fi
       test -n \"\${GCC_LIBDIR}\" || { echo \"FAIL: libgcc.a not found\"; exit 1; }
 
-      echo \"Elf2Mac  : \${ELF2MAC}\"
+      echo \"LD       : \${LD_BIN}\"
       echo \"Real ld  : \${REAL_LD}\"
       echo \"Lib dir  : \${LIBDIR}\"
       echo \"GCC lib  : \${GCC_LIBDIR}\"
@@ -249,15 +278,22 @@ cmd_link() {
       #   2. libc exit() needing _exit back from retrocrt
       # Without this, manually repeating -lretrocrt still fails because libInterface and
       # libgcc are processed BEFORE syscalls.c.obj is extracted by the second retrocrt pass.
-      RETRO68_REAL_LD=\"\${REAL_LD}\" \"\${ELF2MAC}\" \
-        --mac-single \
+      # -elf2mac activates the Elf2Mac code path inside m68k-apple-macos-ld
+      # (a symlink to the Elf2Mac binary).  Without it, ld passes through as
+      # plain binutils ld and the link fails with undefined references to
+      # _stext / _sdata / _sbss / __CTOR_LIST__ / etc.  -q tells the real
+      # ld to be quiet; -undefined=_consolewrite tells it _consolewrite (a
+      # libretrocrt symbol) is allowed to be undefined.  These mirror
+      # exactly what GCC's LINK_SPEC (gcc/config/m68k/m68k-macos.h) passes.
+      \"\${LD_BIN}\" \
+        -elf2mac -q -undefined=_consolewrite \
         -o /work/spike/build/hello.bin \
         /work/spike/build/hello.o \
         -L\"\${LIBDIR}\" \
         -L\"\${GCC_LIBDIR}\" \
         --start-group -lretrocrt -lc -lInterface -lgcc --end-group
 
-      echo 'Elf2Mac: OK'
+      echo 'Link: OK'
     " \
     && echo "Phase 1 link: OK" \
     || { echo "Phase 1 link: FAILED"; exit 1; }
@@ -268,7 +304,7 @@ cmd_link() {
 
 # ── verify ─────────────────────────────────────────────────────────────────
 cmd_verify() {
-  echo "=== Phase 1: Validating MacBinary format ==="
+  echo "=== Phase 1: Validating MacBinary structure ==="
   local BIN="${BUILD_DIR}/hello.bin"
 
   if [ ! -f "${BIN}" ]; then
@@ -276,48 +312,10 @@ cmd_verify() {
     exit 1
   fi
 
-  # MacBinary II header (128 bytes):
-  #   byte   0     : version (0x00 for old/MacBinary II compatibility)
-  #   bytes  1-64  : filename (Pascal string, byte 1 = length)
-  #   bytes 65-68  : file type OSType ('APPL' = 0x41 0x50 0x50 0x4C)
-  #   bytes 69-72  : creator OSType
-  #   bytes 83-86  : data fork length (big-endian uint32)
-  #   bytes 87-90  : resource fork length (big-endian uint32)
-  # We verify type == APPL, data fork present, and resource fork non-empty
-  # (a real Mac app must have CODE resources in its resource fork).
-
-  local FILE_SIZE
-  FILE_SIZE=$(wc -c < "${BIN}")
-  if [ "${FILE_SIZE}" -lt 128 ]; then
-    echo "FAIL: hello.bin is ${FILE_SIZE} bytes — too small for MacBinary header"
-    exit 1
-  fi
-
-  local FILE_TYPE
-  FILE_TYPE=$(dd if="${BIN}" bs=1 skip=65 count=4 2>/dev/null | od -A n -t x1 | tr -d ' \n')
-  if [ "${FILE_TYPE}" = "4150504c" ]; then
-    echo "PASS: MacBinary type = APPL (${FILE_TYPE})"
-  else
-    echo "FAIL: MacBinary type = '${FILE_TYPE}' (expected 4150504c = APPL)"
-    exit 1
-  fi
-
-  # Check resource fork length is non-zero (CODE resources live here).
-  local RSRC_LEN
-  RSRC_LEN=$(python3 -c "
-import struct, sys
-with open('${BIN}', 'rb') as f:
-    f.seek(87)
-    print(struct.unpack('>I', f.read(4))[0])
-")
-  if [ "${RSRC_LEN}" -gt 0 ]; then
-    echo "PASS: Resource fork present (${RSRC_LEN} bytes)"
-  else
-    echo "FAIL: Resource fork is empty — no CODE resources"
-    exit 1
-  fi
-
-  echo "=== MacBinary validation passed (${FILE_SIZE} bytes, rsrc ${RSRC_LEN} bytes) ==="
+  # Delegate to inspect_macbinary.py — checks type=APPL, CODE 0+1, below_a5>0,
+  # DATA, RELA.  The below_a5 / DATA / RELA checks are what catches a
+  # --mac-single regression that would otherwise launch and crash with type 3.
+  python3 "${SPIKE_DIR}/inspect_macbinary.py" "${BIN}"
 }
 
 # ── build-stubs ────────────────────────────────────────────────────────────
@@ -399,20 +397,23 @@ cmd_link_toolbox() {
       set -euo pipefail
 
       BINDIR=/Retro68-build/toolchain/bin
-      ELF2MAC=\${BINDIR}/Elf2Mac
+      # See cmd_link for why we use the m68k-apple-macos-ld symlink and -elf2mac
+      # rather than calling Elf2Mac directly: argv[0] selects the in-binary
+      # code path that generates the linker script libretrocrt needs.
+      LD_BIN=\${BINDIR}/m68k-apple-macos-ld
       REAL_LD=\${BINDIR}/m68k-apple-macos-ld.real
       LIBDIR=/Retro68-build/toolchain/m68k-apple-macos/lib
 
-      if [ ! -x \"\${ELF2MAC}\" ]; then
-        ELF2MAC=\$(find /usr/local -name 'Elf2Mac' -type f 2>/dev/null | head -1)
-        BINDIR=\$(dirname \"\${ELF2MAC}\")
+      if [ ! -x \"\${LD_BIN}\" ] && [ ! -L \"\${LD_BIN}\" ]; then
+        LD_BIN=\$(find /usr/local -name 'm68k-apple-macos-ld' 2>/dev/null | head -1)
+        BINDIR=\$(dirname \"\${LD_BIN}\")
         REAL_LD=\${BINDIR}/m68k-apple-macos-ld.real
         LIBDIR=\$(dirname \"\${BINDIR}\")/m68k-apple-macos/lib
       fi
 
-      test -x \"\${ELF2MAC}\" || { echo \"FAIL: Elf2Mac not found at \${ELF2MAC}\"; exit 1; }
-      test -x \"\${REAL_LD}\"  || { echo \"FAIL: real ld not found at \${REAL_LD}\"; exit 1; }
-      test -d \"\${LIBDIR}\"   || { echo \"FAIL: lib dir not found at \${LIBDIR}\"; exit 1; }
+      test -e \"\${LD_BIN}\"  || { echo \"FAIL: m68k-apple-macos-ld not found at \${LD_BIN}\"; exit 1; }
+      test -x \"\${REAL_LD}\" || { echo \"FAIL: real ld not found at \${REAL_LD}\"; exit 1; }
+      test -d \"\${LIBDIR}\"  || { echo \"FAIL: lib dir not found at \${LIBDIR}\"; exit 1; }
 
       TOOLCHAIN_ROOT=\$(dirname \"\${BINDIR}\")
       GCC_LIBDIR=\$(find \"\${TOOLCHAIN_ROOT}/lib/gcc/m68k-apple-macos\" \
@@ -423,7 +424,7 @@ cmd_link_toolbox() {
       fi
       test -n \"\${GCC_LIBDIR}\" || { echo \"FAIL: libgcc.a not found\"; exit 1; }
 
-      echo \"Elf2Mac  : \${ELF2MAC}\"
+      echo \"LD       : \${LD_BIN}\"
       echo \"Real ld  : \${REAL_LD}\"
       echo \"Lib dir  : \${LIBDIR}\"
       echo \"GCC lib  : \${GCC_LIBDIR}\"
@@ -437,8 +438,10 @@ cmd_link_toolbox() {
       # for ordering hygiene against future Interface contents, not because
       # there is a current symbol collision.
       # --start-group/--end-group handles circular deps between retrocrt/libc/Interface/libgcc.
-      RETRO68_REAL_LD=\"\${REAL_LD}\" \"\${ELF2MAC}\" \
-        --mac-single \
+      # -elf2mac selects Elf2Mac's multi-segment mode inside m68k-apple-macos-ld.
+      # See cmd_link for the full rationale and Retro68 source citations.
+      \"\${LD_BIN}\" \
+        -elf2mac -q -undefined=_consolewrite \
         -o /work/spike/build/hello_toolbox.bin \
         /work/spike/build/hello_toolbox.o \
         /work/spike/build/libtoolbox-stubs.a \
@@ -446,7 +449,7 @@ cmd_link_toolbox() {
         -L\"\${GCC_LIBDIR}\" \
         --start-group -lretrocrt -lc -lInterface -lgcc --end-group
 
-      echo 'Elf2Mac (toolbox): OK'
+      echo 'Link (toolbox): OK'
     " \
     && echo "Phase 2 link: OK" \
     || { echo "Phase 2 link: FAILED"; exit 1; }
@@ -457,7 +460,7 @@ cmd_link_toolbox() {
 
 # ── verify-toolbox ──────────────────────────────────────────────────────────
 cmd_verify_toolbox() {
-  echo "=== Phase 2: Validating hello_toolbox MacBinary format ==="
+  echo "=== Phase 2: Validating hello_toolbox MacBinary structure ==="
   local BIN="${BUILD_DIR}/hello_toolbox.bin"
 
   if [ ! -f "${BIN}" ]; then
@@ -465,38 +468,7 @@ cmd_verify_toolbox() {
     exit 1
   fi
 
-  local FILE_SIZE
-  FILE_SIZE=$(wc -c < "${BIN}")
-  if [ "${FILE_SIZE}" -lt 128 ]; then
-    echo "FAIL: hello_toolbox.bin is ${FILE_SIZE} bytes — too small for MacBinary header"
-    exit 1
-  fi
-
-  local FILE_TYPE
-  FILE_TYPE=$(dd if="${BIN}" bs=1 skip=65 count=4 2>/dev/null | od -A n -t x1 | tr -d ' \n')
-  if [ "${FILE_TYPE}" = "4150504c" ]; then
-    echo "PASS: MacBinary type = APPL (${FILE_TYPE})"
-  else
-    echo "FAIL: MacBinary type = '${FILE_TYPE}' (expected 4150504c = APPL)"
-    exit 1
-  fi
-
-  # Check resource fork length is non-zero (CODE resources live here).
-  local RSRC_LEN
-  RSRC_LEN=$(python3 -c "
-import struct, sys
-with open('${BIN}', 'rb') as f:
-    f.seek(87)
-    print(struct.unpack('>I', f.read(4))[0])
-")
-  if [ "${RSRC_LEN}" -gt 0 ]; then
-    echo "PASS: Resource fork present (${RSRC_LEN} bytes)"
-  else
-    echo "FAIL: Resource fork is empty — no CODE resources"
-    exit 1
-  fi
-
-  echo "=== MacBinary validation passed (${FILE_SIZE} bytes, rsrc ${RSRC_LEN} bytes) ==="
+  python3 "${SPIKE_DIR}/inspect_macbinary.py" "${BIN}"
 }
 
 # ── compare ───────────────────────────────────────────────────────────────

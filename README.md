@@ -1,6 +1,6 @@
 # wasm-retro-cc
 
-> **Status: Native spike pipeline complete through `spike-phase2` (CI green). Browser WASM module — issue #1's "Phase 3" — not started; planning in #3.**
+> **Status: Native spike pipeline complete through `spike-phase2` (CI green). Boot-test pending re-run on the post-`--mac-single`-fix binary (see issue #5, `LEARNINGS.md` "Boot test (2026-05-14)"). Browser WASM port not started; tracked in `classic-vibe-mac` issue #64.**
 > A WASM C compiler targeting the classic Macintosh 68k, designed for use in browser-based playground environments.
 
 ---
@@ -164,7 +164,7 @@ Questions to answer:
 - [x] **Scope decision:** 68020+ output accepted. PCC emits `extb.l`, `muls.l`, etc., so the target is the Mac II / SE30 / Quadra class. 68000-only Macs (128K, Plus, Classic) are out of scope. See `CONTRIBUTING.md` Key decisions.
 - [x] Retro68 Elf2Mac produces a MacBinary from the linked ELF ✅
 - [x] MacBinary passes structural and patcher validation (type APPL, non-empty resource fork, HFS round-trip) ✅
-- [x] **Live boot test attempted 2026-05-14:** binary throws *type 3 (illegal instruction)* under classic-vibe-mac's emulator. **Root cause:** classic-vibe-mac uses Mini vMac (68000 Mac Plus), not BasiliskII as the README previously assumed. PCC's 68020+ output is incompatible with a 68000 CPU. Compiler pipeline is correct; emulator pairing is wrong. See `LEARNINGS.md` "Boot test (2026-05-14)" for details and the strategic decision to swap to BasiliskII in classic-vibe-mac. Tracked in issue #3 and `classic-vibe-mac` issue #61.
+- [x] **Live boot test attempted 2026-05-14:** binary throws *type 3 (illegal instruction)* under classic-vibe-mac's emulator (BasiliskII Quadra-650, 68040, System 7.5.5). **Root cause:** the spike's `Elf2Mac --mac-single` invocation is incompatible with linking `libretrocrt.a` — it produces a binary with `below_a5 = 0` and no DATA / RELA resources, so libretrocrt's `qd` (QuickDraw globals) and other below-A5 statics land in unallocated memory; the first Toolbox call after `InitGraf` crashes. Fix: drop `--mac-single` so Elf2Mac uses its default multi-segment mode (the same mode `add_application` uses for the working binaries in classic-vibe-mac). See `LEARNINGS.md` "Boot test (2026-05-14)" for the full diagnosis and the corrected story.
 
 Deliverable: a shell script (`spike/run-spike.sh`) that compiles `hello.c` through the complete PCC → ELF → MacBinary pipeline, using pre-compiled Retro68 stubs. Failure is a valuable result — it identifies which risk row materialised.
 

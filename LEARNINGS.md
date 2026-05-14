@@ -296,12 +296,12 @@ The m68k backend generates instructions not available on 68000-class CPUs:
 (which have a 68000). They will work on Mac II, IIx, IIcx, IIci, SE/30, Quadra, etc.
 (68020/030/040).
 
-**Verified 2026-05-14:** classic-vibe-mac actually runs **Mini vMac** emulating a
-**Mac Plus (68000)**, not BasiliskII as earlier drafts of this file and the README
-assumed. PCC binaries hit type 3 (illegal instruction) on first 68020+ opcode.
-The compiler pipeline is correct; the emulator pairing is wrong. Resolution:
-swap classic-vibe-mac to BasiliskII (68020/030/040). See "Boot test (2026-05-14)"
-section below for the full reproduction and decision record.
+**Verified 2026-05-14:** classic-vibe-mac runs **BasiliskII** with the
+**Quadra-650 ROM** (68040 CPU, System 7.5.5; infinite-mac-derived port).
+PCC's 68020+ output is fully supported by this CPU. An earlier draft of
+this section incorrectly inferred "Mini vMac (68000)" from a disk-volume
+label in a boot-test screenshot — see the "Boot test (2026-05-14)"
+section below for the corrected story.
 
 ### PCC output format (section directives)
 
@@ -662,7 +662,7 @@ the real ld. You CANNOT feed it a pre-linked ELF. Feed it object files + library
       (`extb.l`, `muls.l`, etc.). Acceptable for Phase 0 if classic-vibe-mac emulates 68020+.
 - [x] What goes in data fork vs resource fork? **RESOURCE fork has ALL code.** Data fork ≈ 20 bytes.
 - [x] What is `MoreMasters()`? Added to `Memory.h`. Allocates master pointer block.
-- [x] Does `classic-vibe-mac` load MacBinary directly? **NO** — HFS patcher → disk image → Mini vMac (today) / BasiliskII (after the planned swap).
+- [x] Does `classic-vibe-mac` load MacBinary directly? **NO** — HFS patcher → disk image → BasiliskII (Quadra-650 ROM, System 7.5.5).
 - [x] Does PCC's `local.c` compile? Fixed by patching `union flt` → `struct flt`.
 - [x] Does `crt0.o` exist in Retro68 lib dir? **NO** — startup is in `libretrocrt.a` (`_start` symbol).
 - [x] Are Toolbox stubs in `libInterface.a`? **NO** — inline A-traps in Retro68 headers; we need our own stubs.
@@ -674,7 +674,7 @@ the real ld. You CANNOT feed it a pre-linked ELF. Feed it object files + library
       register-based (D0-packed), NewWindow is complex (8 args, Phase 2 TODO).
 - [ ] Does Elf2Mac's --mac-single produce MacBinary that boots in classic-vibe-mac? (Phase 1 gate)
 - [ ] Does the resulting MacBinary actually boot in classic-vibe-mac? (Phase 1 gate)
-- [x] Does classic-vibe-mac emulate 68000 or 68020+? **Mini vMac, 68000 Mac Plus** (verified 2026-05-14 via type-3 reproduction). Earlier docs incorrectly assumed BasiliskII/68020. See "Boot test (2026-05-14)" section.
+- [x] Does classic-vibe-mac emulate 68000 or 68020+? **BasiliskII, Quadra-650 ROM, 68040 CPU, System 7.5.5** (verified 2026-05-14 by reading `src/web/public/emulator/` + `src/web/src/emulator-worker.ts:368`). An earlier draft of this entry misread a boot-test screenshot and recorded "Mini vMac, 68000"; that was wrong. See "Boot test (2026-05-14)" section.
 
 ---
 
@@ -878,7 +878,7 @@ big-endian uint32 at offset 87 in the MacBinary header.
 
 ---
 
-## Boot test (2026-05-14) — emulator pairing fixed, BasiliskII chosen
+## Boot test (2026-05-14) — wrong link mode, not wrong emulator
 
 ### What happened
 
@@ -890,80 +890,144 @@ The application "hello_toolbox" has unexpectedly quit, because an error
 of type 3 occurred.    [OK]
 ```
 
-Type 3 on Classic Mac = `dsIllInstErr` (illegal instruction). The screenshot
-also showed a "Mini vMac Boot v2" disk on the desktop — confirming the
-emulator in use.
+The disk mounted, the Finder saw the `hello_toolbox` icon and launched
+it, then the app crashed with type 3 (`dsIllInstErr` — illegal instruction).
 
-### Diagnosis
+### A misdiagnosis (and how it was caught)
 
-The classic-vibe-mac playground runs **Mini vMac**, which by default emulates
-a **Mac Plus (68000)**. PCC's m68k backend emits 68020+ opcodes
-(`extb.l`, `muls.l`, `divs.l`, `link.l`) — these are illegal on a 68000 and
-trap with type 3 on the first one executed. This is the exact risk this file
-flagged on lines 287–297; the project assumed it away on the basis of an
-unchecked claim that "BasiliskII emulates 68020." classic-vibe-mac has never
-used BasiliskII.
+An initial diagnosis read the disk-volume label **"Mini vMac Boot v2"**
+visible on the emulated desktop in the boot-test screenshot and inferred
+the emulator was **Mini vMac (68000 Mac Plus)** — which would mean PCC's
+68020+ output was illegal on the CPU, explaining the type 3.
+
+That inference was wrong. classic-vibe-mac contains
+`src/web/public/emulator/BasiliskII.{js,wasm}` + `Quadra-650.rom`, and
+`src/web/src/emulator-worker.ts:368` reads:
+> `// Quadra 650 = 68040 (cpu 4)`.
+
+The emulator is **BasiliskII** with a **Quadra-650 ROM (68040 CPU, System
+7.5.5)**, sourced from the `infinite-mac` project. "Mini vMac Boot v2" is
+just a volume label on a system disk — not the emulator's identity. The
+project documents this configuration in
+`src/web/src/emulator-config.ts`.
+
+The lesson: a screenshot can identify *what's on the screen*, not *what's
+running underneath*. Always check the integration source, not the desktop.
+
+### The real diagnosis
+
+With the 68040 cleared, the type 3 had to be elsewhere. Comparing
+`hello_toolbox.bin` against a known-working binary on the same playground
+(`macweather.code.bin`, built by Retro68's `add_application` CMake macro)
+surfaced the actual mismatch:
+
+| Property | `hello_toolbox.bin` (broken) | `macweather.code.bin` (works) |
+|---|---|---|
+| CODE segments | 1 (10810 B) | 8 (4452 + 6×80 + 13120 B) |
+| DATA resource | **none** | 1 (1888 B) |
+| RELA resources | **none** | 9 (one per CODE segment) |
+| CODE 0 `above_a5` | 40 | 136 |
+| CODE 0 `below_a5` | **0** | **10424** |
+| CODE 0 jump-table entries | 1 (LoadSeg trap → seg 1) | 13 |
+| CODE 1 first 16 bytes | identical to macweather | identical |
+
+CODE 1's first 16 bytes are byte-identical — both binaries go through the
+same `libretrocrt` `_start` → `Retro68Relocate` → `main` path. The
+difference is the *envelope*.
+
+The spike's `cmd_link*` was invoking `Elf2Mac --mac-single`. That mode
+emits a minimal single-CODE-segment MacBinary with `below_a5=0` and no
+DATA / RELA resources. It's intended for trivial programs that don't link
+`libretrocrt`. We do link `libretrocrt`; its `Retro68Relocate` checks the
+linker-defined `_MULTISEG_APP` symbol and, in the non-multiseg path,
+**never calls `SetCurrentA5()`**. With `below_a5=0` the Process Manager
+allocates no space below A5, so libretrocrt's `qd` (QuickDraw globals)
+and other below-A5 statics land in unallocated memory; the first Toolbox
+call after `InitGraf` walks A5-relative pointers into invalid addresses
+and traps.
+
+Verified against Retro68 source (paths inside the
+`ghcr.io/autc04/retro68` image and on github.com/autc04/Retro68):
+
+- `Elf2Mac/Elf2Mac.cc:101` — default `segments = true`.
+- `Elf2Mac/Object.cc:201-206` — `SingleSegmentApp` hardcodes
+  `above_a5=0x28`, `below_a5=0`, one JT entry. Matches our broken header.
+- `libretro/relocate.c:233-308` — branches on `_MULTISEG_APP`; only the
+  multi-segment path calls `SetCurrentA5()`.
+- `gcc/config/m68k/m68k-macos.h` `LINK_SPEC` — GCC's default invocation
+  of Elf2Mac passes only `-elf2mac` (no `--mac-*`), i.e. multi-segment
+  mode. This is what produces `macweather.code.bin` and friends.
+
+### The fix
+
+Drop `--mac-single` from both `cmd_link` and `cmd_link_toolbox` in
+`spike/run-spike.sh`. With no `--mac-*` flag, Elf2Mac defaults to
+multi-segment mode and emits CODE 0/1..N + DATA + RELA + a properly-sized
+A5 world. This is the same mode `add_application` (the Retro68 CMake
+macro that produced the working `macweather.code.bin`) uses.
+
+A new structural check — `spike/inspect_macbinary.py` — parses CODE 0
+and asserts `below_a5 > 0` + DATA + RELA presence. `cmd_verify` and
+`cmd_verify_toolbox` invoke it. This would have caught the
+`--mac-single` regression in CI before the manual boot test was even
+attempted.
 
 ### What the test *did* prove (don't lose this)
 
-The failure happened during execution, after the app had already launched.
-This rules out three previously open risks:
+The failure happened after the Finder had successfully launched the app,
+which rules out two previously-flagged risks regardless of the fix:
 
-- **MacBinary structure** — fine; the disk mounted and the Finder saw the app.
-- **`SIZE -1` resource** — *not* the blocker; the Finder launched the app
-  despite Elf2Mac `--mac-single` not emitting `SIZE -1` (see line 632).
-- **Calling-convention bridges** in `libtoolbox-stubs.s` — the app got past
-  startup into Toolbox calls before crashing. (Whether *every* stub is right
-  is still untested, but the framework isn't fundamentally broken.)
+- **MacBinary structure** is consumable by the System 7.5.5 Resource
+  Manager.
+- **`SIZE -1` resource is *not* required** for Finder launch on Quadra
+  650 / System 7.5.5. Earlier notes (line 569) had listed it as
+  "required." Empirically not so for hot-loaded apps in this playground.
 
-The crash isolates cleanly to the CPU/ISA mismatch.
+The libtoolbox-stubs framework remains untested in practice — the app
+never executed any of those stubs before crashing. Validation of the
+calling-convention bridges has to wait for a binary that boots.
 
-### Strategic decision
+### Caveats / open follow-ups
 
-**Swap classic-vibe-mac's emulator: Mini vMac → BasiliskII.**
-
-Rationale:
-
-- **No compiler work changes.** PCC + Elf2Mac + libtoolbox-stubs already
-  produce binaries BasiliskII can run. The 68k spike we built becomes
-  immediately useful.
-- **BasiliskII is the most JS-mature 68k browser emulator.** James Friend's
-  emscripten port powers `infinite-mac.app`'s 68k builds. Real production
-  use, not a research prototype.
-- **The same pipeline scales to Mac OS 8.1** by swapping the ROM
-  (Mac II → 68020, Quadra → 68040). No further compiler work needed.
-
-Rejected alternatives:
-
-| Option | Why not |
-|---|---|
-| Patch PCC to emit 68000-only code | Medium-large work (`arch/m68k/{table.c,local2.c}`); LEARNINGS flags this as future work, but the BasiliskII swap is cheaper and unlocks a bigger OS range. |
-| Pivot entire project to SheepShaver / PowerPC | Throws away the 68k compiler. No small browser-portable PowerPC C compiler exists; PCC has no PPC backend; LLVM-PPC is the 12–16 MB bundle we already ruled out. SheepShaver is fine as a future *viewing* target for pre-built PPC apps, not as a compile target. |
-| Add BasiliskII alongside Mini vMac as a second emulator | Wholesale new integration; defer until we know we want both. |
+- **PCC reloc-format compatibility:** Elf2Mac's `Reloc.cc` parses the
+  `R_68K_*` relocations emitted by the assembler. PCC + `m68k-linux-gnu-as`
+  should emit the standard set, but if the post-fix artifact lands with
+  empty RELA resources, that's the next thing to chase (suspect:
+  unsupported relocation types being silently skipped). Verifiable with
+  `readelf -r hello_toolbox.o` and by inspecting the RELA n contents.
+- **`add_application` does more than just call Elf2Mac.** It also runs
+  `Rez` to add SIZE / BNDL / vers / icon resources. Our binary won't get
+  those without a similar step — likely harmless for the hot-load path,
+  may matter later for Finder UX.
+- **`NewWindow` stub** is still NULL-returning; revealed by inspection,
+  not by this test.
 
 ### What this means for the repos
 
-- **`wasm-retro-cc`**: no architectural change required. PCC stays. Elf2Mac
-  stays. Stubs stay. Future work to scale to Mac OS 8.1 (add Toolbox surface,
-  test against Quadra ROM) is incremental, not a rewrite.
-- **`classic-vibe-mac`**: this is where the surgery happens. Mini vMac →
-  BasiliskII is invasive (different emscripten port, different disk image
-  templates, different ROM/System pairing, possibly a larger bundle), but
-  the overall playground architecture stays.
-- **No need to retire either repo.** PowerPC + Mac OS 8.5/9 is a separate
-  spike with its own compiler, packager, and emulator stack; that work
-  warrants a new repo if/when it's unparked. Not a today decision.
+- **wasm-retro-cc**: one-flag fix in the spike's link step + a stronger
+  CI verifier. No architectural change.
+- **classic-vibe-mac**: no change needed. The emulator is already exactly
+  what we wanted. Once the wasm-retro-cc fix lands, re-vendor
+  `src/web/public/precompiled/hello-toolbox.bin` from the new CI artifact
+  and re-run the manual boot test.
+- **No emulator pivot**, no PowerPC pivot, no repo split. The earlier
+  "BasiliskII swap" / "Mini vMac→BasiliskII" / "Quadra ROM choice"
+  framings in this section's earlier draft were all artifacts of the
+  misdiagnosis.
 
-### Open follow-ups
+### Process notes
 
-- [ ] Pick a BasiliskII WASM port for classic-vibe-mac (James Friend's
-      emscripten-basilisk is the strongest candidate). Tracked in
-      `classic-vibe-mac` issue #61.
-- [ ] Decide initial ROM / System pairing: Mac II + System 7.1 (smallest
-      bundle, lowest compat surface) vs Quadra + Mac OS 8.1 (more ambitious
-      ceiling, larger images). Tracked in `classic-vibe-mac` issue #61.
-- [ ] Re-run the `hello_toolbox.bin` boot test post-swap. That becomes the
-      *real* `spike-phase2` exit gate.
-- [ ] Patched-PCC-for-68000 remains a possible future spike if classic-Mac
-      Plus targeting ever matters; not in scope while BasiliskII path works.
+Three lessons from the misdiagnosis, recorded so this doesn't happen
+again:
+
+1. **Compare artifacts side-by-side against a known-working reference.**
+   This single comparison surfaced the real bug in five minutes; it
+   should have been the first diagnostic step, not the recovery move
+   after a wrong pivot.
+2. **CI verification should fail on the same property the runtime fails
+   on.** "type=APPL, rsrc>0" was too weak — both broken and working
+   binaries pass. The new structural check asserts `below_a5 > 0` + DATA
+   + RELA, which actually differentiates.
+3. **Don't infer infrastructure from screenshots.** Read the integration
+   source instead.
 
