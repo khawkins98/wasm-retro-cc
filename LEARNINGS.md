@@ -1405,3 +1405,99 @@ move to the MEMFS pipe-through sub-spike, where we feed it a real
 
 If the first smoke test fails, the failure mode tells us which
 landmine bit us, and the build script has hooks for each one.
+
+
+---
+
+## Phase 2.1 — Emception build mechanics, deltas (2026-05-14)
+
+Outside research read jprendes/emception's actual source after our
+scaffold landed. Captures things our initial planning missed.
+
+### Stage 2 link flags — what we initially missed
+
+| Flag we added | Why | Where Emception uses it |
+| --- | --- | --- |
+| `-sLLD_REPORT_UNDEFINED=1` | Default wasm-ld swallows undefined symbols and produces a wasm with dangling imports that traps at instantiation. With this flag, link fails loudly. | `build-llvm.sh:51` |
+| `ERRNO_CODES` in `EXPORTED_RUNTIME_METHODS` | `EmProcess.mjs:60-84` wraps `FS.ErrnoError` so errors print as `ENOENT` instead of `28`. Without this, every MEMFS bug is a numeric goose chase. | `build-llvm.sh:56` |
+| `CXXFLAGS=-Dwait4=__syscall_wait4` (+ `ac_cv_func_wait4=no` in cache) | Emsdk dropped the `wait4` export at 2.0.32; GCC's `libiberty/pex-unix.c` references it. Belt-and-braces — cache prevents detection, define repaints direct refs. | `build-llvm.sh:51` (set as `CXXFLAGS`) |
+
+### Build triple via `config.guess`, not hard-coded
+
+Hard-coding `--build=x86_64-linux-gnu` breaks on Apple Silicon hosts
+(Docker maps to `linux/aarch64`). Emception's `build-cpython.sh:73`
+uses `--build=$($CPYTHON_SRC/config.guess)`. We adopted the same.
+
+### Prerequisites must be in-tree for stage 2
+
+Stage 1 (native) finds GMP/MPFR/MPC via Ubuntu's `libgmp-dev` host
+packages. Stage 2 (host=wasm32-emscripten) can't reuse those —
+`emcc` has its own sysroot and the host libs are wrong-arch. GCC's
+`contrib/download_prerequisites` drops the source tarballs into the
+source tree where stage 2's configure picks them up automatically.
+First stage-2 build failed at "Building GCC requires GMP 4.2+,
+MPFR 3.1.0+ and MPC 0.8.0+" exactly because of this.
+
+### Snapshot reset — exact sequence (Emception `EmProcess.mjs`)
+
+Init (runs once):
+1. `this._module = await Module({ noInitialRun: true, noExitRuntime: true, … })`
+2. Immediately after resolve: `this._memory = this._module.HEAPU8.slice()`
+   — full linear-memory snapshot. After `__wasm_call_ctors` + `preRun`
+   but before any `main` ran.
+
+Per-invocation `exec()`:
+1. `HEAPU8.fill(0)` — zero pages that may have grown since snapshot.
+2. `HEAPU8.set(this._memory)` — restore snapshot.
+3. Allocate argv with `_malloc` + `allocateUTF8` per arg.
+4. `_main(argc, argv)`.
+5. `_free` everything on `finally`.
+
+**Order matters: fill before set.** `ALLOW_MEMORY_GROWTH=1` may have
+grown linear memory between calls; the tail past the snapshot length
+must be zeroed or you leak prior-invocation state.
+
+**Open risk: wasm globals not in HEAPU8.** Emption's own code has a
+TODO at `EmProcess.mjs:99` flagging this. For Clang they get away
+with it. For GCC, most state is in linear memory (real C globals),
+so probably fine — but `errno`/TLS-style state could live in wasm
+globals depending on Emscripten version. **Investigate after the
+first ICE.** Symptom: deterministic miscompile on the Nth call to
+`cc1` but correct on the (N-1)th.
+
+### PROXYFS / `fsroot.js` — defer to Phase 2.2
+
+Multiple Emscripten modules can share one MEMFS via a custom JS
+library (`emlib/fsroot.js`) injected at link time with
+`--js-library`. **The `--js-library=fsroot.js -lproxyfs.js` flags
+must be present on every wasm binary that participates in the
+shared FS, from day one.** Retrofitting means re-linking every
+`.wasm`. For our Phase 2.1 cc1-only build, we *don't* need PROXYFS
+yet (single process), but worth wiring the flags in pre-emptively
+so Phase 2.2 (`as`) doesn't force a full re-link. **Decision: skip
+for now to keep stage 2 simple — re-link cost is one CI run, not
+worth pre-paying complexity for.**
+
+### Failure modes that haunt Emception's tracker
+
+- **Emsdk version drift** (their #2). Pin a specific tag — never
+  `latest`. We pin 3.1.61; mirror their discipline. If we bump,
+  expect at least one undefined-symbol storm.
+- **Stale rebuilds because re-run gates on file existence**
+  (their #8/#10/#11). Our `build.sh` does the same: `if [ ! -f
+  Makefile ]`. Acceptable for now — when re-running matters, blow
+  away `spike/wasm-cc1/build/stage2/` explicitly.
+- **OOM during link** (their #8). LLVM CXX compile needed 32 GB; GCC
+  stage 2 will be comparable or worse. Local Docker on a 16 GB Mac
+  may hit this in the link phase.
+- **Patch context drift** (their #24): hard-coded patches stop
+  applying after upstream moves. We pin Retro68 by SHA in the
+  Dockerfile to avoid this.
+
+### Sources
+
+- jprendes/emception `build-llvm.sh`, `build-cpython.sh`,
+  `src/EmProcess.mjs`, `src/FileSystem.mjs`, `emlib/fsroot.js`,
+  `patches/llvm-project.patch`
+- Issues #2, #8, #10, #11, #20, #24, #27, #33
+- Our scaffold: `spike/wasm-cc1/{Dockerfile,build.sh,README.md}`

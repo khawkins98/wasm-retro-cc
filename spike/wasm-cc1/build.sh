@@ -112,6 +112,13 @@ cmd_stage2() {
   # Pre-populate config.cache with the answers we know are correct for
   # a no-fork no-exec wasm32 host. These probes otherwise either fail
   # silently or get the wrong answer.
+  #
+  # `wait4` is the canonical "Emscripten version is load-bearing" data
+  # point — emsdk dropped the export at 2.0.32 and our Retro68 GCC's
+  # libiberty/pex-unix.c references it. Seed `no` so configure-time
+  # alternatives are chosen; the build-time alternative is also a
+  # define injected via CFLAGS/CXXFLAGS below. Source: Emception
+  # build-llvm.sh + their issue #2.
   cat > "${STAGE2_DIR}/config.cache" <<'CACHE'
 ac_cv_func_fork=no
 ac_cv_func_vfork=no
@@ -123,19 +130,46 @@ ac_cv_func_setjmp=yes
 ac_cv_func_longjmp=yes
 ac_cv_func_sigaction=no
 ac_cv_func_sigsetmask=no
+ac_cv_func_wait4=no
+ac_cv_func_waitpid=no
 CACHE
 
   echo "[stage2] configuring canadian cross"
   run_in_container "
     set -euo pipefail
     cd /spike/build/stage2
+
+    # GCC depends on GMP/MPFR/MPC at build time. Stage 1 found them on
+    # the apt-installed host paths; stage 2 (host=wasm32-emscripten)
+    # can't reuse those — they need to be wasm-compiled in-tree. GCC
+    # ships contrib/download_prerequisites for exactly this — drops
+    # GMP/MPFR/MPC/ISL source tarballs into the GCC src tree, and
+    # configure picks them up automatically. Idempotent (skips on
+    # re-run if symlinks present).
+    if [ ! -d /Retro68/gcc/gmp ]; then
+      echo '[stage2] downloading GMP/MPFR/MPC prerequisites'
+      (cd /Retro68/gcc && ./contrib/download_prerequisites)
+    fi
+
     if [ ! -f Makefile ]; then
       # emconfigure flips CC/CXX/AR/RANLIB to emcc/em++/emar/emranlib
       # and adjusts host detection so wasm32-unknown-emscripten is
       # accepted. The --cache-file feeds our pre-seeded answers in.
+      #
+      # Build triple: use config.guess so this script works on any host
+      # (arm64 macOS via Docker → linux/aarch64, x86_64 native, etc).
+      # Hard-coding x86_64-linux-gnu broke on Apple Silicon hosts.
+      #
+      # CXXFLAGS=-Dwait4=__syscall_wait4: see config.cache comment
+      # above. Belt-and-braces — config.cache prevents detection;
+      # the define repaints any direct references.
+      BUILD_TRIPLE=\$(/Retro68/gcc/config.guess)
+      echo \"[stage2] build triple: \${BUILD_TRIPLE}\"
+      CXXFLAGS=\"-Dwait4=__syscall_wait4\" \\
+      CFLAGS=\"-Dwait4=__syscall_wait4\" \\
       emconfigure /Retro68/gcc/configure \\
         --cache-file=/spike/build/stage2/config.cache \\
-        --build=x86_64-linux-gnu \\
+        --build=\${BUILD_TRIPLE} \\
         --host=wasm32-unknown-emscripten \\
         --target=m68k-apple-macos \\
         --enable-languages=c \\
@@ -158,12 +192,16 @@ CACHE
 
     echo '[stage2] building cc1 with emmake (this is where things break first)'
     # Emscripten link flags for the final cc1.mjs:
-    #   - ALLOW_MEMORY_GROWTH=1   GC heap can grow
-    #   - MAXIMUM_MEMORY=1GB      cap below wasm32 2 GB ceiling
-    #   - SUPPORT_LONGJMP=wasm    native EH; smaller + faster than JS
-    #   - MODULARIZE/EXPORT_ES6   ES module loader for the JS host
-    #   - EXPORTED_RUNTIME=FS,…   MEMFS access from JS
-    export LDFLAGS=\"-sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=1GB -sSUPPORT_LONGJMP=wasm -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORTED_FUNCTIONS=_main,_malloc,_free -sEXPORTED_RUNTIME_METHODS=FS,allocateUTF8,callMain -o cc1.mjs\"
+    #   - ALLOW_MEMORY_GROWTH=1     GC heap can grow
+    #   - MAXIMUM_MEMORY=1GB        cap below wasm32 2 GB ceiling
+    #   - SUPPORT_LONGJMP=wasm      native EH; smaller + faster than JS
+    #   - LLD_REPORT_UNDEFINED=1    loud link failure; else dangling
+    #                               imports trap at instantiation only
+    #                               (Emception build-llvm.sh:51)
+    #   - MODULARIZE/EXPORT_ES6     ES module loader for the JS host
+    #   - EXPORTED_RUNTIME=FS,…     MEMFS access + readable ERRNO_CODES
+    #                               (else every MEMFS bug is numeric)
+    export LDFLAGS=\"-sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=1GB -sSUPPORT_LONGJMP=wasm -sLLD_REPORT_UNDEFINED=1 -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORTED_FUNCTIONS=_main,_malloc,_free -sEXPORTED_RUNTIME_METHODS=FS,ERRNO_CODES,allocateUTF8,callMain -o cc1.mjs\"
     emmake make all-gcc -j\"\$(nproc)\" 2>&1 | tee build.log | tail -50
 
     echo '[stage2] outputs:'
