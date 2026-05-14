@@ -243,10 +243,20 @@ SITE
     #                               (else every MEMFS bug is numeric)
     export LDFLAGS=\"-sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=1GB -sSUPPORT_LONGJMP=wasm -sLLD_REPORT_UNDEFINED=1 -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORTED_FUNCTIONS=_main,_malloc,_free -sEXPORTED_RUNTIME_METHODS=FS,ERRNO_CODES,allocateUTF8,callMain -o cc1.mjs\"
 
-    # Build cc1 specifically. The makefile target is just \"cc1\" — the
-    # \$(exeext) suffix is empty for our config so we don't need cc1.mjs
-    # as the target name. emmake propagates LDFLAGS into the link.
-    emmake make -C gcc cc1 -j\"\$(nproc)\" 2>&1 | tee build.log | tail -50
+    # Build all-gcc with -k so gcov-tool's failure (undefined ftw — see
+    # iteration 5 in LEARNINGS.md) doesn't abort cc1's link. With -k,
+    # make completes every target it can; cc1 is independent of
+    # gcov-tool. We then verify cc1.wasm / cc1.mjs appeared explicitly
+    # rather than trusting make's exit code.
+    #
+    # Initial attempt was \`make -C gcc cc1\` but the gcc/ subdir's
+    # Makefile isn't generated until the parent make recurses into it
+    # — we'd need to bootstrap via all-prereqs first. -k is simpler
+    # and gets the same result.
+    emmake make all-gcc -k -j\"\$(nproc)\" 2>&1 | tee build.log | tail -50
+    # Don't `set -e` past this — make exited non-zero because of
+    # gcov-tool, but cc1 may have built.
+    true
 
     echo '[stage2] outputs:'
     ls -lh gcc/cc1.mjs gcc/cc1.wasm 2>/dev/null || echo '(cc1.mjs/wasm not produced — see build.log)'
