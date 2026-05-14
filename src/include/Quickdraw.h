@@ -7,11 +7,28 @@
 typedef struct GrafPort GrafPort;
 typedef GrafPort *GrafPtr;
 
+/* Classic Mac OS uses mac68k-style struct packing: 2-byte alignment, no
+ * tail padding on structs.  Retro68's GCC honors this via the multiversal
+ * interfaces' `#pragma options align=mac68k`, so libretrocrt's `qd`
+ * symbol places `thePort` at byte offset 202.  Without pack(2), PCC's
+ * default alignment would force `Ptr baseAddr` inside `BitMap` to 4
+ * bytes — which gives BitMap a 2-byte tail pad (14 → 16), shifting
+ * `thePort` to offset 204 and producing a struct that doesn't match
+ * libretrocrt's `qd` layout.
+ *
+ * Discovered 2026-05-14 from a type-3 boot crash: the readelf -r dump
+ * of hello_toolbox.o showed `R_68K_32 qd + cc` (0xcc = 204), proving
+ * the ABI mismatch.  Wrapping the structs in pack(2) brings BitMap
+ * back to 14 bytes and lands thePort at offset 202.  See
+ * `LEARNINGS.md` "Boot test (2026-05-14)" for the full diagnostic
+ * chain. */
+#pragma pack(push, 2)
+
 typedef struct BitMap {
     Ptr     baseAddr;   /* 4 bytes */
     int16_t rowBytes;   /* 2 bytes */
     Rect    bounds;     /* 8 bytes */
-} BitMap;               /* total: 14 bytes */
+} BitMap;               /* total: 14 bytes (with pack(2) — no tail pad) */
 
 typedef struct Cursor {
     uint16_t data[16];  /* 32 bytes */
@@ -35,6 +52,8 @@ typedef struct QDGlobals {
     Pattern white;         /*   8 bytes, offset 194 -> cumulative: 202 */
     GrafPtr thePort;       /*   4 bytes, offset 202 */
 } QDGlobals;               /* total: 206 bytes */
+
+#pragma pack(pop)
 
 /* QuickDraw globals (A5-relative in a real Mac app; provided by crt0.o) */
 extern QDGlobals qd;
