@@ -132,6 +132,16 @@ ac_cv_func_sigaction=no
 ac_cv_func_sigsetmask=no
 ac_cv_func_wait4=no
 ac_cv_func_waitpid=no
+# psignal: emscripten declares `void psignal(int, const char *)` in
+# signal.h but doesn't link it; autoconf's link probe says "no" and
+# libiberty then defines its own with `char *message` (non-const) →
+# duplicate-symbol-with-different-signature compile error. Force
+# libiberty to assume it exists so it skips its own definition.
+# Same shape as ac_cv_func_wait4 above. Iteration 2 of the cache seed
+# — expect more of these (strerror, asprintf, strndup, getopt) as the
+# build progresses.
+ac_cv_func_psignal=yes
+ac_cv_have_decl_psignal=yes
 CACHE
 
   echo "[stage2] configuring canadian cross"
