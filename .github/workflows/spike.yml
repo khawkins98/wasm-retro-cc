@@ -167,6 +167,31 @@ jobs:
       - name: Bisect — Validate hello_initgraf MacBinary
         run: bash spike/run-spike.sh verify-initgraf
 
+      # H1 probe: hello_initgraf_local.c calls InitGraf with a stack-
+      # allocated GrafPtr instead of &qd.thePort.  Disambiguates whether
+      # the InitGraf crash is from a bad qd-pointer (H1) vs InitGraf
+      # itself misbehaving.
+      - name: H1 probe — Compile hello_initgraf_local.c
+        run: bash spike/run-spike.sh compile-initgraf-local
+
+      - name: H1 probe — Link hello_initgraf_local.bin
+        run: bash spike/run-spike.sh link-initgraf-local
+
+      - name: H1 probe — Validate MacBinary
+        run: bash spike/run-spike.sh verify-initgraf-local
+
+      # Reloc-dump diagnostic on hello_initgraf_local.o for comparison
+      # with hello_initgraf.o.  Different bases for the InitGraf arg's
+      # relocation entry (bss vs none) tell us whether PCC computed the
+      # arg differently.
+      - name: H1 probe — Dump hello_initgraf_local relocations
+        run: |
+          echo "=== Comparison of relocations: hello_initgraf vs hello_initgraf_local ==="
+          echo "--- hello_initgraf.o ---"
+          m68k-linux-gnu-readelf -r spike/build/hello_initgraf.o | head -10
+          echo "--- hello_initgraf_local.o ---"
+          m68k-linux-gnu-readelf -r spike/build/hello_initgraf_local.o | head -10
+
       - name: Upload toolbox artifact (MacBinary + intermediates)
         if: always()
         uses: actions/upload-artifact@v4
@@ -182,5 +207,8 @@ jobs:
             spike/build/hello_initgraf.bin
             spike/build/hello_initgraf.o
             spike/build/hello_initgraf.s
+            spike/build/hello_initgraf_local.bin
+            spike/build/hello_initgraf_local.o
+            spike/build/hello_initgraf_local.s
             spike/build/libtoolbox-stubs.o
           if-no-files-found: ignore

@@ -529,6 +529,57 @@ cmd_verify_initgraf() {
   python3 "${SPIKE_DIR}/inspect_macbinary.py" "${BIN}"
 }
 
+# ── compile/link/verify hello_initgraf_local — H1 probe ──────────────────
+# H1 probe: pass a stack-local GrafPtr to InitGraf instead of &qd.thePort.
+# Eliminates the qd-relocation variable from the test.
+
+cmd_compile_initgraf_local() {
+  echo "=== H1 probe: Compiling hello_initgraf_local.c ==="
+  local SRC="${SPIKE_DIR}/hello_initgraf_local.c"
+  [ -f "${SRC}" ] || { echo "FAIL: ${SRC} not found"; exit 1; }
+  CCOM_BIN=$(find "${PCC_SRC}/cc/ccom" -name "*ccom" -type f 2>/dev/null | head -1)
+  [ -n "${CCOM_BIN}" ] || { echo "ERROR: ccom not found"; exit 1; }
+  gcc -E -I "${SPIKE_DIR}/../src/include" "${SRC}" -o "${BUILD_DIR}/hello_initgraf_local.i" \
+    || { echo "Preprocessing FAILED"; exit 1; }
+  "${CCOM_BIN}" "${BUILD_DIR}/hello_initgraf_local.i" "${BUILD_DIR}/hello_initgraf_local.s" \
+    || { echo "PCC ccom FAILED"; exit 1; }
+  m68k-linux-gnu-as -m68020 "${BUILD_DIR}/hello_initgraf_local.s" -o "${BUILD_DIR}/hello_initgraf_local.o" \
+    || { echo "Assembly FAILED"; exit 1; }
+  echo "=== hello_initgraf_local.o produced ==="
+  m68k-linux-gnu-nm "${BUILD_DIR}/hello_initgraf_local.o" | grep " [TU] " | head -10
+}
+
+cmd_link_initgraf_local() {
+  echo "=== H1 probe: Linking hello_initgraf_local.bin ==="
+  docker run --rm \
+    -v "$(cd "${SPIKE_DIR}/.." && pwd)":/work \
+    --entrypoint /bin/bash \
+    "${RETRO68_IMAGE}" \
+    -c "
+      set -euo pipefail
+      BINDIR=/Retro68-build/toolchain/bin
+      LD_BIN=\${BINDIR}/m68k-apple-macos-ld
+      LIBDIR=/Retro68-build/toolchain/m68k-apple-macos/lib
+      GCC_LIBDIR=\$(find \${BINDIR%/bin}/lib/gcc/m68k-apple-macos -name 'libgcc.a' -type f | head -1 | xargs dirname)
+      \"\${LD_BIN}\" \
+        -elf2mac -q -undefined=_consolewrite \
+        -o /work/spike/build/hello_initgraf_local.bin \
+        /work/spike/build/hello_initgraf_local.o \
+        /work/spike/build/libtoolbox-stubs.a \
+        -L\"\${LIBDIR}\" \
+        -L\"\${GCC_LIBDIR}\" \
+        --start-group -lretrocrt -lc -lInterface -lgcc --end-group
+    " || { echo "H1 probe link FAILED"; exit 1; }
+  ls -lh "${BUILD_DIR}/hello_initgraf_local.bin"
+}
+
+cmd_verify_initgraf_local() {
+  echo "=== H1 probe: Validating hello_initgraf_local MacBinary ==="
+  local BIN="${BUILD_DIR}/hello_initgraf_local.bin"
+  [ -f "${BIN}" ] || { echo "FAIL: hello_initgraf_local.bin not found"; exit 1; }
+  python3 "${SPIKE_DIR}/inspect_macbinary.py" "${BIN}"
+}
+
 # ── compare ───────────────────────────────────────────────────────────────
 # NOTE: This command is NOT run in CI (spike.yml). It is provided for local
 # comparison only. It requires Docker and that 'compile' has already run.
@@ -576,6 +627,9 @@ case "${1:-all}" in
   compile-initgraf) cmd_compile_initgraf ;;
   link-initgraf)    cmd_link_initgraf ;;
   verify-initgraf)  cmd_verify_initgraf ;;
+  compile-initgraf-local) cmd_compile_initgraf_local ;;
+  link-initgraf-local)    cmd_link_initgraf_local ;;
+  verify-initgraf-local)  cmd_verify_initgraf_local ;;
   compare)          cmd_compare ;;
   all)
     cmd_setup && cmd_build_pcc \
