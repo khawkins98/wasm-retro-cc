@@ -109,17 +109,28 @@ cmd_stage2() {
   cmd_image
   mkdir -p "${STAGE2_DIR}"
 
-  # Pre-populate config.cache with the answers we know are correct for
-  # a no-fork no-exec wasm32 host. These probes otherwise either fail
+  # Pre-populate a config.site with the answers we know are correct
+  # for a no-fork no-exec wasm32 host. These probes otherwise fail
   # silently or get the wrong answer.
   #
-  # `wait4` is the canonical "Emscripten version is load-bearing" data
-  # point — emsdk dropped the export at 2.0.32 and our Retro68 GCC's
-  # libiberty/pex-unix.c references it. Seed `no` so configure-time
-  # alternatives are chosen; the build-time alternative is also a
-  # define injected via CFLAGS/CXXFLAGS below. Source: Emception
-  # build-llvm.sh + their issue #2.
-  cat > "${STAGE2_DIR}/config.cache" <<'CACHE'
+  # WHY config.site, not --cache-file: GCC's top-level configure is
+  # passed --cache-file, but sub-configures (libiberty/, libcpp/,
+  # gcc/...) each run their own configure inside `make all-gcc` and
+  # do NOT reliably inherit the parent's cache. CONFIG_SITE is read
+  # by every autoconf-generated configure regardless of nesting —
+  # the only reliable injection point. Confirmed by attempt 3
+  # (psignal): top-level configure honoured the cache, libiberty's
+  # sub-configure did not, same conflict recurred.
+  #
+  # Pattern: emscripten declares some POSIX function in its sysroot
+  # headers but doesn't link it (or links an ENOSYS stub). Autoconf
+  # link probe answers "no" → libiberty defines its own replacement
+  # → compilation sees both declarations → error. Force "yes" for
+  # the conflict-prone ones so libiberty skips its replacement.
+  #
+  # Belt-and-braces with -Dwait4=__syscall_wait4 in CFLAGS below.
+  # Source: Emception build-llvm.sh + their issue #2.
+  cat > "${STAGE2_DIR}/config.site" <<'SITE'
 ac_cv_func_fork=no
 ac_cv_func_vfork=no
 ac_cv_func_kill=no
@@ -132,17 +143,9 @@ ac_cv_func_sigaction=no
 ac_cv_func_sigsetmask=no
 ac_cv_func_wait4=no
 ac_cv_func_waitpid=no
-# psignal: emscripten declares `void psignal(int, const char *)` in
-# signal.h but doesn't link it; autoconf's link probe says "no" and
-# libiberty then defines its own with `char *message` (non-const) →
-# duplicate-symbol-with-different-signature compile error. Force
-# libiberty to assume it exists so it skips its own definition.
-# Same shape as ac_cv_func_wait4 above. Iteration 2 of the cache seed
-# — expect more of these (strerror, asprintf, strndup, getopt) as the
-# build progresses.
 ac_cv_func_psignal=yes
 ac_cv_have_decl_psignal=yes
-CACHE
+SITE
 
   echo "[stage2] configuring canadian cross"
   run_in_container "
@@ -177,8 +180,8 @@ CACHE
       echo \"[stage2] build triple: \${BUILD_TRIPLE}\"
       CXXFLAGS=\"-Dwait4=__syscall_wait4\" \\
       CFLAGS=\"-Dwait4=__syscall_wait4\" \\
+      CONFIG_SITE=/spike/build/stage2/config.site \\
       emconfigure /Retro68/gcc/configure \\
-        --cache-file=/spike/build/stage2/config.cache \\
         --build=\${BUILD_TRIPLE} \\
         --host=wasm32-unknown-emscripten \\
         --target=m68k-apple-macos \\
@@ -200,7 +203,8 @@ CACHE
         2>&1 | tee configure.log | tail -100
     fi
 
-    echo '[stage2] building cc1 with emmake (this is where things break first)'
+    echo '[stage2] building cc1 with emmake (sub-makes inherit CONFIG_SITE)'
+    export CONFIG_SITE=/spike/build/stage2/config.site
     # Emscripten link flags for the final cc1.mjs:
     #   - ALLOW_MEMORY_GROWTH=1     GC heap can grow
     #   - MAXIMUM_MEMORY=1GB        cap below wasm32 2 GB ceiling

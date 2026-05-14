@@ -1501,3 +1501,52 @@ worth pre-paying complexity for.**
   `patches/llvm-project.patch`
 - Issues #2, #8, #10, #11, #20, #24, #27, #33
 - Our scaffold: `spike/wasm-cc1/{Dockerfile,build.sh,README.md}`
+
+---
+
+## Phase 2.1 — `--cache-file` doesn't propagate; use `CONFIG_SITE` (2026-05-14)
+
+**Verified surprise.** GCC's top-level `configure` accepts `--cache-file=FILE`
+and reads our seeded answers, but the sub-configures triggered inside
+`make all-gcc` (`libiberty/configure`, `libcpp/configure`, `gcc/configure`,
+`zlib/configure`, ...) do NOT reliably inherit it. They run in their own
+build directories and consult `./config.cache` or no cache at all.
+
+Symptom: stage 2 attempt 3 had `ac_cv_func_psignal=yes` in our config.cache,
+top-level configure honoured it, libiberty's sub-configure didn't, and the
+same `strsignal.c:554 conflicting types for 'psignal'` error returned. Same
+build dir, same source tree, same script — identical second failure.
+
+**Fix that works: `CONFIG_SITE`.** Autoconf reads `$CONFIG_SITE` (or
+`$prefix/share/config.site` + `$prefix/etc/config.site` as fallbacks)
+*before every configure invocation*, regardless of nesting. Set it once,
+export it, every sub-configure picks it up.
+
+```bash
+cat > /spike/build/stage2/config.site <<'SITE'
+ac_cv_func_psignal=yes
+ac_cv_have_decl_psignal=yes
+# ...etc
+SITE
+CONFIG_SITE=/spike/build/stage2/config.site \
+emconfigure /Retro68/gcc/configure ...
+# AND export it for the make step so sub-configures triggered by make see it:
+export CONFIG_SITE=/spike/build/stage2/config.site
+emmake make all-gcc
+```
+
+**Pattern recap (why this matters):** Emscripten's sysroot headers declare
+many POSIX functions (`psignal`, `wait4`, `kill`, ...) but the libc doesn't
+link them. Autoconf's link-test probe says "function not present"; libiberty
+then defines its own replacement; compile-time both declarations are
+visible; signature mismatch → error. Seeding `ac_cv_func_X=yes` tells
+libiberty to skip its replacement.
+
+**Open**: expect to seed more functions as the build progresses past
+libiberty. The configure scan shows: `feof_unlocked`, `fputs_unlocked`,
+`setproctitle`, `setenv`, `memchr` — most are genuinely missing on
+emscripten so libiberty's replacements are correct. The ones to watch for
+are those emscripten *declares* but doesn't *link* — that's the
+conflict-on-compile failure mode. Look for the error pattern `conflicting
+types for 'X'` and add `ac_cv_func_X=yes` to config.site, not all "no"
+answers from configure.
