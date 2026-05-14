@@ -580,6 +580,56 @@ cmd_verify_initgraf_local() {
   python3 "${SPIKE_DIR}/inspect_macbinary.py" "${BIN}"
 }
 
+# ── compile/link/verify hello_initgraf_zone — H2 probe ───────────────────
+# H2 probe: call MaxApplZone + MoreMasters x3 before InitGraf.
+
+cmd_compile_initgraf_zone() {
+  echo "=== H2 probe: Compiling hello_initgraf_zone.c ==="
+  local SRC="${SPIKE_DIR}/hello_initgraf_zone.c"
+  [ -f "${SRC}" ] || { echo "FAIL: ${SRC} not found"; exit 1; }
+  CCOM_BIN=$(find "${PCC_SRC}/cc/ccom" -name "*ccom" -type f 2>/dev/null | head -1)
+  [ -n "${CCOM_BIN}" ] || { echo "ERROR: ccom not found"; exit 1; }
+  gcc -E -I "${SPIKE_DIR}/../src/include" "${SRC}" -o "${BUILD_DIR}/hello_initgraf_zone.i" \
+    || { echo "Preprocessing FAILED"; exit 1; }
+  "${CCOM_BIN}" "${BUILD_DIR}/hello_initgraf_zone.i" "${BUILD_DIR}/hello_initgraf_zone.s" \
+    || { echo "PCC ccom FAILED"; exit 1; }
+  m68k-linux-gnu-as -m68020 "${BUILD_DIR}/hello_initgraf_zone.s" -o "${BUILD_DIR}/hello_initgraf_zone.o" \
+    || { echo "Assembly FAILED"; exit 1; }
+  echo "=== hello_initgraf_zone.o produced ==="
+  m68k-linux-gnu-nm "${BUILD_DIR}/hello_initgraf_zone.o" | grep " [TU] " | head
+}
+
+cmd_link_initgraf_zone() {
+  echo "=== H2 probe: Linking hello_initgraf_zone.bin ==="
+  docker run --rm \
+    -v "$(cd "${SPIKE_DIR}/.." && pwd)":/work \
+    --entrypoint /bin/bash \
+    "${RETRO68_IMAGE}" \
+    -c "
+      set -euo pipefail
+      BINDIR=/Retro68-build/toolchain/bin
+      LD_BIN=\${BINDIR}/m68k-apple-macos-ld
+      LIBDIR=/Retro68-build/toolchain/m68k-apple-macos/lib
+      GCC_LIBDIR=\$(find \${BINDIR%/bin}/lib/gcc/m68k-apple-macos -name 'libgcc.a' -type f | head -1 | xargs dirname)
+      \"\${LD_BIN}\" \
+        -elf2mac -q -undefined=_consolewrite \
+        -o /work/spike/build/hello_initgraf_zone.bin \
+        /work/spike/build/hello_initgraf_zone.o \
+        /work/spike/build/libtoolbox-stubs.a \
+        -L\"\${LIBDIR}\" \
+        -L\"\${GCC_LIBDIR}\" \
+        --start-group -lretrocrt -lc -lInterface -lgcc --end-group
+    " || { echo "H2 probe link FAILED"; exit 1; }
+  ls -lh "${BUILD_DIR}/hello_initgraf_zone.bin"
+}
+
+cmd_verify_initgraf_zone() {
+  echo "=== H2 probe: Validating hello_initgraf_zone MacBinary ==="
+  local BIN="${BUILD_DIR}/hello_initgraf_zone.bin"
+  [ -f "${BIN}" ] || { echo "FAIL: hello_initgraf_zone.bin not found"; exit 1; }
+  python3 "${SPIKE_DIR}/inspect_macbinary.py" "${BIN}"
+}
+
 # ── compare ───────────────────────────────────────────────────────────────
 # NOTE: This command is NOT run in CI (spike.yml). It is provided for local
 # comparison only. It requires Docker and that 'compile' has already run.
@@ -630,6 +680,9 @@ case "${1:-all}" in
   compile-initgraf-local) cmd_compile_initgraf_local ;;
   link-initgraf-local)    cmd_link_initgraf_local ;;
   verify-initgraf-local)  cmd_verify_initgraf_local ;;
+  compile-initgraf-zone)  cmd_compile_initgraf_zone ;;
+  link-initgraf-zone)     cmd_link_initgraf_zone ;;
+  verify-initgraf-zone)   cmd_verify_initgraf_zone ;;
   compare)          cmd_compare ;;
   all)
     cmd_setup && cmd_build_pcc \
