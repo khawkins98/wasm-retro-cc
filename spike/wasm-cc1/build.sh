@@ -164,6 +164,21 @@ SITE
       (cd /Retro68/gcc && ./contrib/download_prerequisites)
     fi
 
+    # The bundled config.sub in GMP/MPFR/MPC predates wasm32 support
+    # and rejects \`wasm32-unknown-emscripten\` with
+    #   Invalid configuration \`wasm32-unknown-emscripten':
+    #   system \`emscripten' not recognized
+    # GCC's own config.sub (timestamp 2021-10-27 in our tree) knows
+    # the triplet. Overwrite each prerequisite's autoconf helpers
+    # with the GCC tree's newer copies. Idempotent.
+    echo '[stage2] patching prerequisite config.sub/config.guess for wasm32'
+    for sub in gmp mpfr mpc isl; do
+      if [ -d /Retro68/gcc/\$sub ]; then
+        cp /Retro68/gcc/config.sub   /Retro68/gcc/\$sub/config.sub   2>/dev/null || true
+        cp /Retro68/gcc/config.guess /Retro68/gcc/\$sub/config.guess 2>/dev/null || true
+      fi
+    done
+
     if [ ! -f Makefile ]; then
       # emconfigure flips CC/CXX/AR/RANLIB to emcc/em++/emar/emranlib
       # and adjusts host detection so wasm32-unknown-emscripten is
