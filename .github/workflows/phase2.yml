@@ -1,0 +1,43 @@
+# Phase 2 Retro68 build pipeline.
+#
+# Compiles spike/hello_toolbox.c with the pinned Retro68 GCC toolchain
+# (same Docker image digest used by the archived Phase 1 spike.yml) and
+# uploads the produced complete MacBinary II APPL as an artifact, so the
+# downstream classic-vibe-mac repo can vendor the bytes by `gh run
+# download` rather than rebuilding the toolchain locally.
+#
+# This is the CI mirror of spike/build-retro68.sh. The script is the
+# source of truth — keep the two in sync. If you change the image SHA in
+# the script, change it here too.
+#
+# Trigger policy: workflow_dispatch only. Phase 2 work is still
+# pre-Emscripten — every push doesn't need to burn CI minutes on a 4 GB
+# image pull. Run manually when you want a fresh artifact.
+
+name: Phase 2 — Retro68 GCC build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-retro68-toolbox:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build hello_toolbox with Retro68 GCC
+        run: bash spike/build-retro68.sh
+
+      - name: Inspect MacBinary structure
+        run: python3 spike-pcc/inspect_macbinary.py spike/build/hello-toolbox-retro68.bin
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase2-retro68-toolbox
+          # Both files — the .bin for vendoring, the .sha for provenance
+          # tracking in classic-vibe-mac's VENDORED.md.
+          path: |
+            spike/build/hello-toolbox-retro68.bin
+            spike/build/hello-toolbox-retro68.sha
+          if-no-files-found: error
