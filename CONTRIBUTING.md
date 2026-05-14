@@ -8,26 +8,25 @@ Working through unsolved problems twice wastes everyone's time.
 
 ## Project status
 
-**Phase 2 (current): Retro68 GCC → WASM port.** Tracking issue:
-[#11](https://github.com/khawkins98/wasm-retro-cc/issues/11). The plan,
-rationale, and starting sub-spikes are in that issue and in
-`LEARNINGS.md` under "Phase 2 pivot (2026-05-14)".
+See [`README.md`](./README.md) "Phase 2 status" for the canonical
+done / in-progress / won't-do breakdown. Short version: Phase 2.0
+(Retro68 GCC vendoring derisk) ✅ landed 2026-05-14; Phase 2.1
+(`cc1` Emscripten port) is in active scaffolding under
+[`spike/wasm-cc1/`](./spike/wasm-cc1/). Tracking issue:
+[#11](https://github.com/khawkins98/wasm-retro-cc/issues/11).
 
-**Phase 1 (archived): PCC m68k → MacBinary II native pipeline.** Lives in
-[`spike-pcc/`](./spike-pcc/) with its own [`ARCHIVE.md`](./spike-pcc/ARCHIVE.md)
-explaining what it did and why we stopped iterating on it. Reproducible
-manually via the workflow_dispatch-only **[archived] PCC m68k pipeline**
-GitHub Action.
-
-The `hello*.c` probes in `spike-pcc/` serve as the **regression corpus**
-for Phase 2 — they are compiler-agnostic and the same source files
-should compile-and-run under the new GCC → WASM toolchain.
+Phase 1 (PCC m68k → MacBinary II native pipeline) is archived in
+[`spike-pcc/`](./spike-pcc/) with its own
+[`ARCHIVE.md`](./spike-pcc/ARCHIVE.md). The `hello*.c` probes there
+serve as the **regression corpus** for Phase 2 — they are
+compiler-agnostic and the same source files should compile-and-run
+under the new GCC → WASM toolchain.
 
 ---
 
 ## Prerequisites
 
-### Phase 2 (Retro68 GCC → WASM port — not started)
+### Phase 2 (Retro68 GCC → WASM port — in progress)
 
 Expected toolchain:
 
@@ -64,7 +63,11 @@ wasm-retro-cc/
 ├── LEARNINGS.md           ← Cross-phase technical discoveries
 ├── CONTRIBUTING.md        ← You are here
 │
-├── spike/                 ← Phase 2 work lands here (TBD)
+├── spike/                 ← Phase 2 work
+│   ├── README.md          Phase 2.0 overview
+│   ├── hello_toolbox.c    Derisk source (compiles under Retro68 GCC)
+│   ├── build-retro68.sh   Docker-driven Retro68 build (Phase 2.0)
+│   └── wasm-cc1/          Phase 2.1 cc1 → WASM port scaffold
 │
 ├── spike-pcc/             ← Phase 1 archive — see ARCHIVE.md
 │   ├── ARCHIVE.md
@@ -76,7 +79,8 @@ wasm-retro-cc/
 │   └── docs/              PCC-era design docs (archived)
 │
 └── .github/
-    ├── workflows/spike.yml  Manual-only [archived] PCC pipeline
+    ├── workflows/phase2.yml  Manual Retro68 build (Phase 2.0)
+    ├── workflows/spike.yml   Manual-only [archived] PCC pipeline
     └── ISSUE_TEMPLATE/
 ```
 
@@ -84,11 +88,19 @@ wasm-retro-cc/
 
 ## Development workflow
 
-The Phase 2 build/test scripts are TBD. Expect them to live under
-`spike/` once the first sub-spike (Phase 2.0: verify a vendored Retro68
-GCC binary actually boots) lands.
+```bash
+# Phase 2.0 — Retro68 GCC build (Docker, ~5 min on first run)
+bash spike/build-retro68.sh
 
-For the Phase 1 archive workflow, see `spike-pcc/ARCHIVE.md`.
+# Phase 2.1 — cc1 → WASM port (Docker, hours; see README for stages)
+bash spike/wasm-cc1/build.sh image    # build the toolchain image
+bash spike/wasm-cc1/build.sh stage1   # native cross-cc1
+bash spike/wasm-cc1/build.sh stage2   # wasm cc1.mjs + cc1.wasm
+bash spike/wasm-cc1/build.sh smoke    # Node `--version` smoke test
+```
+
+For the Phase 1 archive workflow, see
+[`spike-pcc/ARCHIVE.md`](./spike-pcc/ARCHIVE.md).
 
 ---
 
@@ -107,10 +119,13 @@ These are settled.
 
 ## Key decisions still open (Phase 2)
 
-- [ ] Emscripten build configuration for `m68k-apple-macos-gcc` — vendor an Emception-style fork or upstream-clean port?
-- [ ] Bundle-size budget. Initial target ~25–40 MB gzipped (lazy-loaded). Stripping unused frontends + treeshaking libs is the main lever.
+- [ ] Bundle-size budget. Updated target ~3-5 MB brotli for `cc1` alone (smaller than the initial estimate; see `LEARNINGS.md` "Phase 2.1 research"). Stripping unused frontends + treeshaking libs is the main lever.
 - [ ] Filesystem strategy: MEMFS vs IDBFS for headers + libraries.
 - [ ] How to surface compiler error/warning output to the playground UI.
+
+Decisions already made for Phase 2.1 are captured in
+[`spike/wasm-cc1/README.md`](./spike/wasm-cc1/README.md) "Critical
+design decisions" — don't relitigate without reading that first.
 
 ---
 

@@ -14,6 +14,25 @@ for use inside browser-based emulators like
 
 ---
 
+## Phase 2 status
+
+| What's done | In progress / to do | Won't do (out of scope) |
+| --- | --- | --- |
+| ✅ Phase 2.0 — Retro68 GCC vendoring derisk. Reference binary built from `hello_toolbox.c` via the pinned Retro68 image; vendored into classic-vibe-mac; verified end-to-end on deployed playground (DrawString renders "Hello, World!"). See PRs wasm-retro-cc#13 and cv-mac#78. | 🚧 Phase 2.1 — Emscripten port of `m68k-apple-macos-cc1`. Scaffold landed (#14); Docker image built. Stages remaining: native stage 1 build → canadian-cross stage 2 (this produces `cc1.wasm` + `cc1.mjs`) → Node `--version` smoke test. Iteration expected on five known landmines documented in [`spike/wasm-cc1/README.md`](./spike/wasm-cc1/README.md). | ❌ **C++ support.** Phase 2 is C-only (`--enable-languages=c`). Cuts ~60% of GCC's frontend mass; Classic Mac C is the only target users care about. |
+| ✅ Phase 2 research baseline. Closest precedent (Emception) reverse-engineered, canadian-cross recipe + `config.cache` seeds + Emscripten link flags + memory-snapshot reset trick all captured in [`LEARNINGS.md`](./LEARNINGS.md) "Phase 2.1 research". | 🟡 Phase 2.1.x — MEMFS pipe-through. After the `--version` smoke test passes, wire `cc1` to actually compile a `.c` from MEMFS and emit `.s`. | ❌ **GCC's full bootstrap (stage1/2/3 self-host).** `--disable-bootstrap`. Stage 2 builds with the host's native gcc only. Self-hosting `cc1` inside WASM is impossible without the runtime we're building. |
+| ✅ Cross-repo integration plumbing reused from Phase 1: HFS patcher, MacBinary inspector, Playwright boot tester, SHA + info.txt diagnostics. All compiler-agnostic — they will catch Phase 2 regressions the same way they caught Phase 1's. | ⬜ Phase 2.2 — Emscripten port of `as` (the assembler). Smaller binary than cc1; same patterns. | ❌ **Driver / `collect2` / link-stage runner.** Emscripten has no `fork`/`exec`. We bypass GCC's driver entirely and call `cc1` directly from JS with cooked argv. Same approach for `as` and `ld`. |
+|  | ⬜ Phase 2.3 — Wire `ld` (binutils) + Elf2Mac into the WASM pipeline. End-to-end JS API: `.c` source in → MacBinary II bytes out. | ❌ **PowerPC / CFM / Mac OS 8 / SheepShaver.** Long-term aspiration, not Phase 2. We target 68040 Quadra-650 under BasiliskII, mirroring classic-vibe-mac's deploy env. |
+|  | ⬜ Phase 2.4 — Bundle-size optimisation pass. Updated target: ~3-5 MB brotli for `cc1`, ~6-8 MB brotli for the full toolchain after dead-code elimination + single-target backend (m68k only). | ❌ **In-browser compilation of the Retro68 SDK headers themselves.** Headers are pre-built; only user code goes through the wasm `cc1`. |
+|  | ⬜ Phase 2.5 — npm package mirroring [`wasm-rez`](https://github.com/khawkins98/wasm-rez)'s API. Wire into classic-vibe-mac's playground. |  |
+
+Phase 1 (PCC m68k → MacBinary II native pipeline) is archived in
+[`spike-pcc/`](./spike-pcc/). Three real bugs fixed during that
+investigation, but the remaining crash-on-any-Toolbox-call defied
+nine hours of bisect work — the trigger for the Phase 2 pivot.
+Full retrospective in [`spike-pcc/ARCHIVE.md`](./spike-pcc/ARCHIVE.md).
+
+---
+
 ## What this is
 
 The goal is a self-contained WASM module — `retro-cc.wasm` +
