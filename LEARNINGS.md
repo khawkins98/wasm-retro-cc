@@ -1205,3 +1205,203 @@ on push/PR. See [`spike-pcc/ARCHIVE.md`](./spike-pcc/ARCHIVE.md).
   almost-read as the emulator's identity. The repo runs BasiliskII
   Quadra-650, not Mini vMac. Always cross-reference what the
   *emulator* is (read `emulator-worker.ts`, not the disk label).
+
+
+---
+
+## Phase 2.0 — Retro68 GCC vendoring derisk passed (2026-05-14)
+
+Smallest possible derisk before any Emscripten work began: compile the
+same `hello_toolbox.c` we used as the Phase 1 PCC bisect probe with the
+pinned Retro68 GCC image (`ghcr.io/autc04/retro68@sha256:e8b6cc8…`),
+vendor the result into classic-vibe-mac, and watch it run on the
+deployed playground BasiliskII.
+
+**Result: clean pass.** Structural inspection matches the reference
+shape (`APPL` + `CODE 0` + 8× `CODE` + `DATA` + 9× `RELA` + `SIZE`,
+`above_a5=56 below_a5=1428 jt_size=24 jt_entries=3`). The cv-mac HFS
+patcher accepted the binary without errors. End-to-end test on
+deployed Pages: app launched, `DrawString` rendered "Hello, World!" at
+(100, 100) on the screen port. This is the exact operation the Phase 1
+PCC binary crashed on across nine hours of bisect work.
+
+**What this rules out:** the hypothesis "Retro68's MacBinary output
+might have some structural property our patcher/emulator/Mac OS won't
+accept." It doesn't. The remaining Phase 2 risk is purely the
+(known-bounded) Emscripten port of GCC + binutils + Elf2Mac.
+
+**Implementation notes (worth keeping):**
+
+- `add_application(name … files)` produces *two* outputs:
+  `name.code.bin` (partial — the linker emits this as the executable's
+  `OUTPUT_NAME`) and `name.bin` (complete APPL — emitted by a separate
+  `name_APPL` CMake target that runs Rez over `name.code.bin` with
+  `Retro68APPL.r`). **`cmake --build . --target name` only builds the
+  partial.** You have to build the ALL target (no `--target`) or
+  `name_APPL` explicitly to get the complete MacBinary II.
+- Retro68's pure-m68k binaries have a **0-byte data fork** — the
+  20-byte CFM stub our PCC pipeline produced is *not present* and not
+  needed. (Initial worry: would the cv-mac patcher choke on
+  `dataLen=0`? Answer: no, it's handled.)
+- The downstream filename mismatch is fine. MacBinary header carries
+  one name (`HelloToolboxRetro68` from the CMake target), but
+  cv-mac's `PrebuiltDemo.filename` *overrides* it when writing the
+  HFS catalog entry. The Finder shows whatever cv-mac asks for.
+- Local-preview test harness has a permanent quirk: the bundled
+  `system755-vibe.dsk` doesn't apply `NO_STARTUP_ITEMS=1`, so
+  MacWeather auto-launches and visually masks the Apps disk icon
+  region. Deployed Pages env applies it. Don't waste time debugging
+  "Apps disk missing" against local preview — test on Pages.
+
+Cross-repo PRs: wasm-retro-cc#13, classic-vibe-mac#78.
+
+
+---
+
+## Phase 2.1 — Emscripten port of cc1, research (2026-05-14)
+
+Distilled from a focused research pass on prior art before any code
+goes in. The full discussion is preserved in `spike/wasm-cc1/README.md`
+("Critical design decisions" + "Known landmines" sections); this is
+the long-term reference layer.
+
+### The strategic problem
+
+Retro68's m68k backend exists *only in GCC*. Clang has no
+`m68k-apple-macos` target. So the GCC-to-WASM port is non-negotiable
+for this project — we cannot follow Emception's "pick Clang because
+it's a library" path because Clang doesn't have the backend we need.
+
+### Closest prior art
+
+- **[Emception](https://github.com/jprendes/emception)** (Jorge Prendes)
+  — Clang + LLVM compiled to WASM via Emscripten. The two-stage build
+  in `build-llvm.sh` is the canonical pattern: native stage 1
+  produces table-gen / build tools, wasm stage 2 reuses them via
+  `-DLLVM_TABLEGEN=$STAGE1/llvm-tblgen`. Bundle ends up ~10–12 MB
+  brotli for the full toolchain.
+- **The 2-hunk LLVM patch** at `patches/llvm-project.patch` is the
+  load-bearing magic: forces Clang's driver to call `cc1` in-process
+  (no `fork`/`exec`). For GCC's monolithic driver-spawning model the
+  equivalent is "don't use the driver at all — call `cc1` directly
+  from JS with cooked argv."
+- **[racerxdl/riscv-online-asm](https://github.com/racerxdl/riscv-online-asm)**
+  — GNU `as` / `objdump` / `objcopy` to WASM. Shares libiberty +
+  autoconf pain with GCC; their `config.cache` seeding and stub
+  layer for `pex-unix.c` are directly transferable.
+- **[pipcet/gcc `asmjs` branch](https://github.com/pipcet/gcc)** —
+  old (~2018) GCC wasm *backend*, never merged. Build-system
+  patches in `config.guess`, `config.sub`, `libiberty/configure.ac`
+  are cargo-cult worthy for our host-side use.
+- **No prior art** for full GCC-as-host (wasm32) cross-compiling to
+  any target. We're first.
+
+### Canadian cross — concrete recipe
+
+```
+stage1: build=host=x86_64-linux-gnu, target=m68k-apple-macos
+        (just produces gen* tools + generated headers for stage 2)
+
+stage2: build=x86_64-linux-gnu, host=wasm32-unknown-emscripten,
+        target=m68k-apple-macos
+        emconfigure + emmake all-gcc
+        --disable-bootstrap (cannot run wasm cc1 to bootstrap stage 2)
+        --enable-languages=c (no C++/Fortran/Ada → ~60% mass cut)
+        --with-build-time-tools=$stage1/gcc/build (reuse, never re-run)
+```
+
+### Pre-seeded `config.cache` (dodges autoconf misfires)
+
+```
+ac_cv_func_fork=no
+ac_cv_func_vfork=no
+ac_cv_func_kill=no
+ac_cv_func_pipe=no
+ac_cv_func_sigaction=no
+ac_cv_func_sigsetmask=no
+ac_cv_func_mmap=yes
+ac_cv_func_setjmp=yes
+ac_cv_func_longjmp=yes
+ac_cv_func_dup2=yes
+```
+
+Reason: `AC_CHECK_FUNCS` compiles tiny probes and links them with
+`wasm-ld`. Some probes link successfully because Emscripten provides
+ENOSYS-returning stubs, leading autoconf to assume the function works.
+We pre-answer to match reality (the stubs exist but the calls do
+nothing at runtime).
+
+### Emscripten link flags that matter
+
+| Flag | Why |
+| --- | --- |
+| `-sALLOW_MEMORY_GROWTH=1` | GCC's GC heap is unpredictable |
+| `-sMAXIMUM_MEMORY=1GB` | Cap below wasm32's 2 GB ceiling |
+| `-sSUPPORT_LONGJMP=wasm` | Native EH; smaller + faster than `=emscripten`. GCC uses sjlj heavily |
+| `-sMODULARIZE=1 -sEXPORT_ES6=1` | ES module loader for JS host |
+| `-sEXPORTED_FUNCTIONS=_main,_malloc,_free` | JS needs to call `main` + manage strings |
+| `-sEXPORTED_RUNTIME_METHODS=FS,allocateUTF8,callMain` | MEMFS + argv + invoke |
+
+### Memory-snapshot reset between invocations (Emception trick)
+
+GCC has tons of global state: GC heap (`ggc-page.c`), obstacks
+(`obstack.h` users), `current_function_decl`, the entire
+`global_options` flags struct, identifier table, line maps. Easiest
+reset is `HEAPU8.set(initialMemorySnapshot)` — capture the linear
+memory right after `Module()` initialises, then memcpy it back before
+every `callMain`. Cheaper than `Module()` re-instantiation by ~100×.
+
+### Realistic bundle-size target
+
+Retro68's `m68k-apple-macos-cc1` on disk is ~40–50 MB unstripped,
+~15–20 MB stripped (native ELF). With `--enable-languages=c` +
+`--disable-checking` + single-target backend + `-Os -flto` +
+`--disable-nls`, expect:
+
+- Raw wasm: ~12–18 MB
+- gzip:     ~4–6 MB
+- brotli:   ~3–5 MB
+
+Compare Emception's full clang+lld+5 LLVM tools at ~10–12 MB brotli.
+GCC ends up smaller per-language because we cut every backend except
+m68k. If we land north of 10 MB brotli, Phase 2.4 has more work than
+estimated in tracker #11.
+
+### Known landmines (expect in order)
+
+1. **`AC_CHECK_FUNCS` link tests miscompile.** Pre-seed config.cache
+   per above. If a new check breaks the build, add the answer.
+2. **`libiberty/pex-*.c` references `fork`/`exec`.** Emscripten links
+   ENOSYS stubs. We never call them (we bypass the driver), but the
+   *build* may try to test linkage. Replace with no-op stubs if so.
+3. **`mmap` for GC heap.** Works under Emscripten's anonymous mmap
+   when `ALLOW_MEMORY_GROWTH=1`. Cap at 1 GB to keep below the wasm32
+   2 GB ceiling and treat OOM as "user submitted too much C."
+4. **Generated headers must match between stages.** Stage 2 reuses
+   `insn-*.h` from stage 1. Build both stages from the *identical
+   commit* of the GCC tree — any version-macro drift causes silent
+   miscompiles. We pin a single `RETRO68_COMMIT` in the Dockerfile.
+5. **Computed gotos.** GCC's `genrecog.c`-generated `insn-recog.c`
+   uses `&&label` heavily. Emscripten/LLVM lowers these fine via
+   `br_table`/relooper — confirmed working in Emception's LLVM build,
+   which uses the same pattern. Not expected to be a blocker, but if
+   the build dies on `insn-recog.c` start here.
+
+### What this sub-spike does NOT cover
+
+- Building `as` / `ld` / Elf2Mac to WASM (Phase 2.2 / 2.3 — separate
+  sub-spikes, smaller binaries, same patterns).
+- MEMFS plumbing for real source files (Phase 2.1.x — after first
+  smoke test).
+- Bundle-size optimisation pass (Phase 2.4).
+- npm packaging mirroring wasm-rez (Phase 2.5).
+
+### What "Phase 2.1 done" looks like
+
+`cc1.wasm` loads from Node, `callMain(['--version'])` exits 0 and
+prints the version string. Then we know the binary is real and can
+move to the MEMFS pipe-through sub-spike, where we feed it a real
+`.c` source and check that it emits real `.s` output.
+
+If the first smoke test fails, the failure mode tells us which
+landmine bit us, and the build script has hooks for each one.

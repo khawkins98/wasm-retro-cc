@@ -1,6 +1,9 @@
 # wasm-retro-cc
 
 > **Status (May 2026): Phase 2 — porting Retro68 GCC to WebAssembly.**
+> Phase 2.0 (vendored Retro68 GCC artefact derisk) ✅ landed 2026-05-14.
+> Phase 2.1 (`cc1` Emscripten port) in progress — see
+> [`spike/wasm-cc1/`](./spike/wasm-cc1/).
 > Phase 1 (PCC native pipeline) is archived in [`spike-pcc/`](./spike-pcc/).
 > Tracking: [issue #11](https://github.com/khawkins98/wasm-retro-cc/issues/11),
 > cross-repo roadmap in [classic-vibe-mac #64](https://github.com/khawkins98/classic-vibe-mac/issues/64).
@@ -126,17 +129,36 @@ so the hand-written shim layer from Phase 1 (`spike-pcc/include/`,
 
 ```
 wasm-retro-cc/
-├── README.md              ← this file
-├── LEARNINGS.md           ← cross-phase technical findings
-├── CONTRIBUTING.md        ← setup, workflow, settled decisions
+├── README.md                ← this file
+├── LEARNINGS.md             ← cross-phase technical findings
+├── CONTRIBUTING.md          ← setup, workflow, settled decisions
 │
-├── spike/                 ← Phase 2 work lands here (TBD)
+├── spike/                   ← Phase 2 work
+│   ├── README.md            ← Phase 2.0 overview
+│   ├── hello_toolbox.c      ← derisk source (2.0)
+│   ├── build-retro68.sh     ← Docker-driven Retro68 GCC build (2.0)
+│   └── wasm-cc1/            ← Phase 2.1 cc1 → WASM port
+│       ├── README.md        ← architecture, landmines, recipe
+│       ├── Dockerfile       ← Emscripten + Retro68 sources
+│       └── build.sh         ← stage1 native + stage2 wasm
 │
-├── spike-pcc/             ← Phase 1 archive — ARCHIVE.md inside
+├── spike-pcc/               ← Phase 1 archive — ARCHIVE.md inside
 │
 └── .github/workflows/
-    └── spike.yml          ← manual-only [archived] PCC pipeline
+    ├── phase2.yml           ← manual Retro68 build (Phase 2.0)
+    └── spike.yml            ← manual-only [archived] PCC pipeline
 ```
+
+### Phase 2 progress
+
+| Sub-spike | Status | Tracker |
+| --- | --- | --- |
+| 2.0 — Retro68 binary vendoring derisk | ✅ landed 2026-05-14 | #11, #13, cv-mac#78 |
+| 2.1 — Emscripten port of `cc1` | 🚧 scaffold landed; first build pending | #11 |
+| 2.2 — Emscripten port of `as` | not started | #11 |
+| 2.3 — Wire `ld` + Elf2Mac into WASM pipeline | not started | #11 |
+| 2.4 — Bundle-size optimisation | not started | #11 |
+| 2.5 — npm packaging (mirror `wasm-rez` API) | not started | #11 |
 
 ---
 
