@@ -193,8 +193,18 @@ SITE
       # the define repaints any direct references.
       BUILD_TRIPLE=\$(/Retro68/gcc/config.guess)
       echo \"[stage2] build triple: \${BUILD_TRIPLE}\"
-      CXXFLAGS=\"-Dwait4=__syscall_wait4\" \\
-      CFLAGS=\"-Dwait4=__syscall_wait4\" \\
+      # CFLAGS/CXXFLAGS rationale:
+      # -Dwait4=__syscall_wait4 — see config.site notes; emscripten
+      #   renamed wait4 between 2.0.31 and 2.0.32.
+      # -Os — optimize for size. The default GCC config emits -O2 -g
+      #   for stage 2; an unstripped -O2 cc1.wasm came out at 58 MB
+      #   in iteration 7, which OOM'd wasm-emscripten-finalize on a
+      #   7.75 GB Docker host (finalize spikes to 10+ GB on huge
+      #   wasms). -Os shrinks both object files and the final binary.
+      # -g0 — no debug info. Strips ~70% of the wasm size; matches
+      #   our Phase 2.4 size target (3-5 MB brotli) trajectory.
+      CXXFLAGS=\"-Dwait4=__syscall_wait4 -Os -g0\" \\
+      CFLAGS=\"-Dwait4=__syscall_wait4 -Os -g0\" \\
       CONFIG_SITE=/spike/build/stage2/config.site \\
       emconfigure /Retro68/gcc/configure \\
         --build=\${BUILD_TRIPLE} \\
