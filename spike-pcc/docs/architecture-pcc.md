@@ -1,12 +1,20 @@
-# Architecture — wasm-retro-cc
+# Architecture — wasm-retro-cc (PCC pipeline, ARCHIVED)
+
+> **Archived 2026-05-14.** This document describes the Phase 1 PCC
+> pipeline as it stood when development paused. We pivoted to
+> Retro68 GCC → WASM — see [`../ARCHIVE.md`](../ARCHIVE.md) and the
+> repo root [`README.md`](../../README.md). The "planned WASM
+> pipeline" section below was the Phase 1 target and does **not**
+> describe Phase 2.
 
 ## Overview
 
 This document covers both:
-1. the **implemented native spike pipeline** (current), and
-2. the **planned browser WASM pipeline** (target).
+1. the **implemented native spike pipeline** (Phase 1, archived), and
+2. the **then-planned browser WASM pipeline** (Phase 1 target, superseded).
 
-Current implementation is CI-driven and native-hosted (`spike/run-spike.sh`), not yet browser WASM.
+The Phase 1 implementation was CI-driven and native-hosted
+(`../run-spike.sh`), not yet browser WASM when archived.
 
 ```
 ┌────────────────────────────────────────────────────────┐
@@ -57,14 +65,14 @@ source.c
 > emulates a 68020 by default. Phase 0 binaries target Mac II / SE/30 / Quadra class;
 > 68000-only Macs (128K, Plus, Classic) are out of scope.
 
-### Shim headers (`src/include/`)
+### Shim headers (`../include/`)
 
 Plain C90 `extern` declarations for the Mac Toolbox. These replace Retro68's
 A-trap-based SDK headers, which use GCC-specific syntax PCC cannot parse.
 
 See `docs/header-strategy.md` for the detailed design.
 
-### Pre-compiled stubs (`src/stubs/`)
+### Pre-compiled stubs (`../stubs/`)
 
 Extracted from `ghcr.io/autc04/retro68:latest` in CI. Key libraries:
 
@@ -72,7 +80,7 @@ Extracted from `ghcr.io/autc04/retro68:latest` in CI. Key libraries:
 - **`libc.a`** — standard C library
 - **`libInterface.a`** — ~30 uppercase OS-level stubs only (GESTALT, DELAY, etc.)
 - **`libtoolbox-stubs.a`** — hand-assembled stubs for QuickDraw,
-  Window Manager, Event Manager, etc. (libInterface.a does NOT include these). Implemented in `src/stubs/libtoolbox-stubs.s`.
+  Window Manager, Event Manager, etc. (libInterface.a does NOT include these). Implemented in `../stubs/libtoolbox-stubs.s`.
 
 In the current spike, stubs are assembled in CI/local spike runs and linked natively.
 
@@ -100,25 +108,32 @@ Format reference: see `LEARNINGS.md` → MacBinary II Format section.
 
 ```
 wasm-retro-cc/
-├── src/
-│   ├── include/        Shim headers (Tier 1 + Tier 2 Mac Toolbox APIs)
-│   └── stubs/          Hand-written toolbox bridge stubs (`libtoolbox-stubs.s`)
-├── spike/
-│   ├── hello.c         Basic spike test program
-│   ├── hello_toolbox.c Toolbox spike test program
-│   ├── mac.ld          Linker script used by spike
-│   └── run-spike.sh    Phase 0/1/2 automation
-├── docs/
-│   ├── architecture.md (this file)
-│   ├── abi.md          m68k calling convention reference
-│   └── header-strategy.md  Shim header design decisions
-├── .github/
-│   ├── extensions/     Copilot CLI agents
-│   ├── workflows/      CI (stub extraction, WASM build, tests)
-│   └── ISSUE_TEMPLATE/ Bug report, feature request, header request
-├── LEARNINGS.md        Research findings and experiment results
+└── spike-pcc/             ← (this directory) archived PCC pipeline
+    ├── include/           Shim headers (mac68k-packed Toolbox APIs)
+    ├── stubs/             Hand-written A-trap bridge stubs (`libtoolbox-stubs.s`)
+    ├── hello.c            Phase 0 probe (no Toolbox)
+    ├── hello_toolbox.c    Phase 2 probe (full Toolbox init)
+    ├── hello_initgraf*.c  Bisect probes (InitGraf, H1, H2)
+    ├── mac.ld             Linker script for Phase 0 bare-metal ELF
+    ├── crt0_minimal.s     Phase 0 _start stub
+    ├── pcc.patch          Patches to PCC m68k backend
+    ├── inspect_macbinary.py  Structural validator
+    ├── run-spike.sh       Phase 0/1/2 driver
+    ├── ARCHIVE.md         Why this is archived
+    └── docs/
+        ├── architecture-pcc.md  (this file)
+        ├── abi.md              m68k calling convention reference
+        └── header-strategy.md  Shim header design decisions
+```
+
+Repo top-level (Phase 2, current):
+
+```
+wasm-retro-cc/
+├── README.md           Project overview (Phase 2 = Retro68 GCC → WASM)
+├── LEARNINGS.md        Research findings across both phases
 ├── CONTRIBUTING.md     Setup, workflow, settled decisions
-└── README.md           PRD / project overview
+└── .github/workflows/spike.yml  Manual workflow that exercises this archive
 ```
 
 ## JS API (planned, not implemented)

@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
-# spike/run-spike.sh — Phase 0/1/2 feasibility script
+# spike-pcc/run-spike.sh — Phase 0/1/2 feasibility script (ARCHIVED)
+#
+# ARCHIVE STATUS (2026-05-14): this is the PCC compiler path from Phase 1.
+# It builds correctly-shaped MacBinary II binaries but the linked output
+# crashes on Toolbox entry (any Toolbox A-trap → type-3/CHK/type-10 on the
+# emulator). Investigation paused after three real bugs fixed and no
+# successful boot. We pivoted to Retro68 GCC → WASM in Phase 2 — see
+# ../README.md and ../LEARNINGS.md "Phase 2 pivot (2026-05-14)".
+#
+# Kept here for reproducibility and as the regression corpus for the new
+# pipeline (the hello*.c probes are compiler-agnostic). Triggered via
+# manual workflow_dispatch only; no longer runs on push/PR.
 #
 # Tests the PCC m68k compilation pipeline through to MacBinary output.
 #
@@ -9,17 +20,17 @@
 #           (proves A-trap stubs bridge C cdecl → Mac ROM correctly)
 #
 # Usage:
-#   bash spike/run-spike.sh setup            # extract Retro68 stubs from Docker, clone PCC
-#   bash spike/run-spike.sh build-pcc        # build PCC for m68k code generation
-#   bash spike/run-spike.sh compile          # Phase 0: compile hello.c with PCC → ELF
-#   bash spike/run-spike.sh link             # Phase 1: link ELF → MacBinary via Elf2Mac
-#   bash spike/run-spike.sh verify           # Phase 1: validate MacBinary header
-#   bash spike/run-spike.sh build-stubs      # Phase 2: assemble libtoolbox-stubs.a
-#   bash spike/run-spike.sh compile-toolbox  # Phase 2: compile hello_toolbox.c → ELF
-#   bash spike/run-spike.sh link-toolbox     # Phase 2: link toolbox ELF → MacBinary
-#   bash spike/run-spike.sh verify-toolbox   # Phase 2: validate toolbox MacBinary header
-#   bash spike/run-spike.sh compare          # compare vs Retro68 reference (local only)
-#   bash spike/run-spike.sh all              # run all phases end-to-end
+#   bash spike-pcc/run-spike.sh setup            # extract Retro68 stubs from Docker, clone PCC
+#   bash spike-pcc/run-spike.sh build-pcc        # build PCC for m68k code generation
+#   bash spike-pcc/run-spike.sh compile          # Phase 0: compile hello.c with PCC → ELF
+#   bash spike-pcc/run-spike.sh link             # Phase 1: link ELF → MacBinary via Elf2Mac
+#   bash spike-pcc/run-spike.sh verify           # Phase 1: validate MacBinary header
+#   bash spike-pcc/run-spike.sh build-stubs      # Phase 2: assemble libtoolbox-stubs.a
+#   bash spike-pcc/run-spike.sh compile-toolbox  # Phase 2: compile hello_toolbox.c → ELF
+#   bash spike-pcc/run-spike.sh link-toolbox     # Phase 2: link toolbox ELF → MacBinary
+#   bash spike-pcc/run-spike.sh verify-toolbox   # Phase 2: validate toolbox MacBinary header
+#   bash spike-pcc/run-spike.sh compare          # compare vs Retro68 reference (local only)
+#   bash spike-pcc/run-spike.sh all              # run all phases end-to-end
 
 set -euo pipefail
 SPIKE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -65,7 +76,7 @@ cmd_setup() {
 cmd_build_pcc() {
   echo "=== Building PCC ccom for m68k code generation ==="
   if [ ! -d "${PCC_SRC}" ]; then
-    echo "ERROR: ${PCC_SRC} not found — run 'bash spike/run-spike.sh setup' first" >&2
+    echo "ERROR: ${PCC_SRC} not found — run 'bash spike-pcc/run-spike.sh setup' first" >&2
     exit 1
   fi
   pushd "${PCC_SRC}" > /dev/null
@@ -85,13 +96,13 @@ ac_cv_target_alias=m68k-unknown-apple
 EOF
 
   # Apply source patches (union flt → struct flt; USE_IEEEFP_*).
-  # See spike/pcc.patch for the full rationale.  --reverse --check first so
+  # See spike-pcc/pcc.patch for the full rationale.  --reverse --check first so
   # re-running setup is idempotent (skips if already applied).
   if ! git apply --reverse --check "${SPIKE_DIR}/pcc.patch" 2>/dev/null; then
     git apply "${SPIKE_DIR}/pcc.patch"
-    echo "Applied spike/pcc.patch"
+    echo "Applied spike-pcc/pcc.patch"
   else
-    echo "spike/pcc.patch already applied — skipping"
+    echo "spike-pcc/pcc.patch already applied — skipping"
   fi
 
   ./configure --cache-file=config.cache --target=m68k-unknown-apple --disable-nativefp
@@ -126,7 +137,7 @@ cmd_compile() {
   # ccom is the compiler proper and expects preprocessed input.
   # Step 1: preprocess with the system C preprocessor.
   gcc -E \
-    -I "${SPIKE_DIR}/../src/include" \
+    -I "${SPIKE_DIR}/include" \
     "${SPIKE_DIR}/hello.c" \
     -o "${BUILD_DIR}/hello.i" \
     && echo "Preprocessing: OK" \
@@ -287,8 +298,8 @@ cmd_link() {
       # exactly what GCC's LINK_SPEC (gcc/config/m68k/m68k-macos.h) passes.
       \"\${LD_BIN}\" \
         -elf2mac -q -undefined=_consolewrite \
-        -o /work/spike/build/hello.bin \
-        /work/spike/build/hello.o \
+        -o /work/spike-pcc/build/hello.bin \
+        /work/spike-pcc/build/hello.o \
         -L\"\${LIBDIR}\" \
         -L\"\${GCC_LIBDIR}\" \
         --start-group -lretrocrt -lc -lInterface -lgcc --end-group
@@ -321,7 +332,7 @@ cmd_verify() {
 # ── build-stubs ────────────────────────────────────────────────────────────
 cmd_build_stubs() {
   echo "=== Phase 2: Assembling libtoolbox-stubs.a ==="
-  local STUBS_S="${SPIKE_DIR}/../src/stubs/libtoolbox-stubs.s"
+  local STUBS_S="${SPIKE_DIR}/stubs/libtoolbox-stubs.s"
   local STUBS_O="${BUILD_DIR}/libtoolbox-stubs.o"
   local STUBS_A="${BUILD_DIR}/libtoolbox-stubs.a"
 
@@ -358,7 +369,7 @@ cmd_compile_toolbox() {
 
   # Preprocess with the system C preprocessor.
   gcc -E \
-    -I "${SPIKE_DIR}/../src/include" \
+    -I "${SPIKE_DIR}/include" \
     "${SRC}" \
     -o "${BUILD_DIR}/hello_toolbox.i" \
     && echo "Preprocessing: OK" \
@@ -442,9 +453,9 @@ cmd_link_toolbox() {
       # See cmd_link for the full rationale and Retro68 source citations.
       \"\${LD_BIN}\" \
         -elf2mac -q -undefined=_consolewrite \
-        -o /work/spike/build/hello_toolbox.bin \
-        /work/spike/build/hello_toolbox.o \
-        /work/spike/build/libtoolbox-stubs.a \
+        -o /work/spike-pcc/build/hello_toolbox.bin \
+        /work/spike-pcc/build/hello_toolbox.o \
+        /work/spike-pcc/build/libtoolbox-stubs.a \
         -L\"\${LIBDIR}\" \
         -L\"\${GCC_LIBDIR}\" \
         --start-group -lretrocrt -lc -lInterface -lgcc --end-group
@@ -485,7 +496,7 @@ cmd_compile_initgraf() {
   CCOM_BIN=$(find "${PCC_SRC}/cc/ccom" -name "*ccom" -type f 2>/dev/null | head -1)
   [ -n "${CCOM_BIN}" ] || { echo "ERROR: ccom not found — run build-pcc"; exit 1; }
 
-  gcc -E -I "${SPIKE_DIR}/../src/include" "${SRC}" -o "${BUILD_DIR}/hello_initgraf.i" \
+  gcc -E -I "${SPIKE_DIR}/include" "${SRC}" -o "${BUILD_DIR}/hello_initgraf.i" \
     && echo "Preprocessing: OK" || { echo "Preprocessing: FAILED"; exit 1; }
   "${CCOM_BIN}" "${BUILD_DIR}/hello_initgraf.i" "${BUILD_DIR}/hello_initgraf.s" \
     && echo "PCC ccom: OK" || { echo "PCC ccom: FAILED"; exit 1; }
@@ -509,9 +520,9 @@ cmd_link_initgraf() {
       GCC_LIBDIR=\$(find \${BINDIR%/bin}/lib/gcc/m68k-apple-macos -name 'libgcc.a' -type f | head -1 | xargs dirname)
       \"\${LD_BIN}\" \
         -elf2mac -q -undefined=_consolewrite \
-        -o /work/spike/build/hello_initgraf.bin \
-        /work/spike/build/hello_initgraf.o \
-        /work/spike/build/libtoolbox-stubs.a \
+        -o /work/spike-pcc/build/hello_initgraf.bin \
+        /work/spike-pcc/build/hello_initgraf.o \
+        /work/spike-pcc/build/libtoolbox-stubs.a \
         -L\"\${LIBDIR}\" \
         -L\"\${GCC_LIBDIR}\" \
         --start-group -lretrocrt -lc -lInterface -lgcc --end-group
@@ -539,7 +550,7 @@ cmd_compile_initgraf_local() {
   [ -f "${SRC}" ] || { echo "FAIL: ${SRC} not found"; exit 1; }
   CCOM_BIN=$(find "${PCC_SRC}/cc/ccom" -name "*ccom" -type f 2>/dev/null | head -1)
   [ -n "${CCOM_BIN}" ] || { echo "ERROR: ccom not found"; exit 1; }
-  gcc -E -I "${SPIKE_DIR}/../src/include" "${SRC}" -o "${BUILD_DIR}/hello_initgraf_local.i" \
+  gcc -E -I "${SPIKE_DIR}/include" "${SRC}" -o "${BUILD_DIR}/hello_initgraf_local.i" \
     || { echo "Preprocessing FAILED"; exit 1; }
   "${CCOM_BIN}" "${BUILD_DIR}/hello_initgraf_local.i" "${BUILD_DIR}/hello_initgraf_local.s" \
     || { echo "PCC ccom FAILED"; exit 1; }
@@ -563,9 +574,9 @@ cmd_link_initgraf_local() {
       GCC_LIBDIR=\$(find \${BINDIR%/bin}/lib/gcc/m68k-apple-macos -name 'libgcc.a' -type f | head -1 | xargs dirname)
       \"\${LD_BIN}\" \
         -elf2mac -q -undefined=_consolewrite \
-        -o /work/spike/build/hello_initgraf_local.bin \
-        /work/spike/build/hello_initgraf_local.o \
-        /work/spike/build/libtoolbox-stubs.a \
+        -o /work/spike-pcc/build/hello_initgraf_local.bin \
+        /work/spike-pcc/build/hello_initgraf_local.o \
+        /work/spike-pcc/build/libtoolbox-stubs.a \
         -L\"\${LIBDIR}\" \
         -L\"\${GCC_LIBDIR}\" \
         --start-group -lretrocrt -lc -lInterface -lgcc --end-group
@@ -589,7 +600,7 @@ cmd_compile_initgraf_zone() {
   [ -f "${SRC}" ] || { echo "FAIL: ${SRC} not found"; exit 1; }
   CCOM_BIN=$(find "${PCC_SRC}/cc/ccom" -name "*ccom" -type f 2>/dev/null | head -1)
   [ -n "${CCOM_BIN}" ] || { echo "ERROR: ccom not found"; exit 1; }
-  gcc -E -I "${SPIKE_DIR}/../src/include" "${SRC}" -o "${BUILD_DIR}/hello_initgraf_zone.i" \
+  gcc -E -I "${SPIKE_DIR}/include" "${SRC}" -o "${BUILD_DIR}/hello_initgraf_zone.i" \
     || { echo "Preprocessing FAILED"; exit 1; }
   "${CCOM_BIN}" "${BUILD_DIR}/hello_initgraf_zone.i" "${BUILD_DIR}/hello_initgraf_zone.s" \
     || { echo "PCC ccom FAILED"; exit 1; }
@@ -613,9 +624,9 @@ cmd_link_initgraf_zone() {
       GCC_LIBDIR=\$(find \${BINDIR%/bin}/lib/gcc/m68k-apple-macos -name 'libgcc.a' -type f | head -1 | xargs dirname)
       \"\${LD_BIN}\" \
         -elf2mac -q -undefined=_consolewrite \
-        -o /work/spike/build/hello_initgraf_zone.bin \
-        /work/spike/build/hello_initgraf_zone.o \
-        /work/spike/build/libtoolbox-stubs.a \
+        -o /work/spike-pcc/build/hello_initgraf_zone.bin \
+        /work/spike-pcc/build/hello_initgraf_zone.o \
+        /work/spike-pcc/build/libtoolbox-stubs.a \
         -L\"\${LIBDIR}\" \
         -L\"\${GCC_LIBDIR}\" \
         --start-group -lretrocrt -lc -lInterface -lgcc --end-group
