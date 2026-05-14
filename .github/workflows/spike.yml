@@ -129,16 +129,41 @@ jobs:
           echo "=== Defined symbols ==="
           m68k-linux-gnu-nm spike/build/hello_toolbox.o | grep " T " || echo "(none)"
 
+      # Diagnostic added 2026-05-14 after type-3 boot crash investigation.
+      # Elf2Mac only honors R_68K_32 (type 1) and R_68K_PC32 (type 4); every
+      # other reloc type is silently dropped (Section.cc:GetRelocations).
+      # If PCC emits any other type, those relocations are lost and the
+      # binary will crash at runtime even though the link succeeds.  Also
+      # checks REL vs RELA: if PCC emits .rel.text (no 'a'), Elf2Mac's
+      # gelf_getrela path never matches and ALL relocations vanish.
+      - name: Phase 2 — Dump PCC relocation types + section table
+        run: |
+          echo "=== Section headers (looking for .rela.* vs .rel.* and SHT_RELA vs SHT_REL) ==="
+          m68k-linux-gnu-readelf -S spike/build/hello_toolbox.o
+          echo
+          echo "=== Relocation entries (looking for any type other than R_68K_32 / R_68K_PC32) ==="
+          m68k-linux-gnu-readelf -r spike/build/hello_toolbox.o
+          echo
+          echo "=== Relocation type histogram ==="
+          m68k-linux-gnu-readelf -r spike/build/hello_toolbox.o \
+            | awk '/R_68K/ {print $3}' | sort | uniq -c
+
       - name: Phase 2 — Link toolbox ELF → MacBinary via Elf2Mac
         run: bash spike/run-spike.sh link-toolbox
 
       - name: Phase 2 — Validate toolbox MacBinary format
         run: bash spike/run-spike.sh verify-toolbox
 
-      - name: Upload toolbox MacBinary artifact
+      - name: Upload toolbox artifact (MacBinary + intermediates)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: phase2-macbinary-toolbox
-          path: spike/build/hello_toolbox.bin
+          # Bundle .o + .s alongside the .bin so reloc-format debugging
+          # doesn't require a fresh CI run.
+          path: |
+            spike/build/hello_toolbox.bin
+            spike/build/hello_toolbox.o
+            spike/build/hello_toolbox.s
+            spike/build/libtoolbox-stubs.o
           if-no-files-found: ignore
