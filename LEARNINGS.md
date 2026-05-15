@@ -2239,3 +2239,82 @@ End-to-end C → MacBinary II APPL in the browser, in ~4 MB brotli,
 all four tools chained through MEMFS, structurally valid output.
 Bootable equivalence still requires the multi-segment ld script +
 SIZE resource — both bounded follow-ups.
+
+---
+
+## Bundle hardening for cv-mac integration (2026-05-15, PR #20)
+
+Three things had to land before the cv-mac side could vendor and use
+the full pipeline cleanly. All small, all surprised someone.
+
+### Sysroot blob split
+
+The original `build-show-asm-bundle.mjs` packed one blob — gcc-include
++ include. Adding lib + ld script for the full-pipeline path would
+have ~tripled the *cold-load* cost of the Show Assembly panel (~3.6 MB
+brotli → ~4.7 MB) for a payload that path never reads.
+
+Fix: two blobs, two indices. `sysroot.bin` (headers, 185 KB br) and
+`sysroot-libs.bin` (libs + ld script, 1.1 MB br). Consumers choose
+their fetch list per operation. cv-mac's `compileToAsm` fetches only
+the headers blob; `compileToBin` fetches both.
+
+Browser HTTP cache still hits the same URL for shared artefacts
+(notably `cc1.wasm`), so a user who opens Show Assembly first and
+then clicks Build .c reuses the cached compiler.
+
+### Case-fold sysroot aliases (#20)
+
+cv-mac's first end-to-end `compileToBin` run failed at cc1 with
+`fatal error: strings.h: No such file or directory` — despite the
+header being in our sysroot tree on disk.
+
+Two distinct files coexist in the Retro68 SDK:
+- `include/Strings.h` — Mac Toolbox `StringHandle`, `EqualString`, …
+- `include/strings.h` — BSD-style `strcasecmp`, `strncasecmp`.
+
+Newlib's `string.h` does `#include <strings.h>` (lowercase, BSD) on
+line 24. On case-sensitive FS (Linux / Emscripten MEMFS) this resolves
+to the lowercase variant. On macOS HFS+ (case-insensitive default),
+the two files collapse to one on extraction — whichever case won the
+extraction order. Our packed sysroot had `Strings.h` (Toolbox) and *no*
+`strings.h`. MEMFS in the browser is case-sensitive and refused the
+lowercase include.
+
+Fix: the bundle packer now emits a **lowercase alias entry** for any
+file whose lowercase path differs from the on-disk path AND whose
+lowercase form isn't already a distinct entry. Zero blob-byte cost —
+aliases share `{o,l}` with the original. ~38 alias entries on the
+headers blob, ~1.7 KB JSON index overhead.
+
+The on-disk content for `Strings.h` is actually the BSD `strings.h`
+(the Toolbox version got lost to the case-collision). True fix is
+re-extracting the sysroot on a case-sensitive filesystem (Linux
+container or APFS case-sensitive volume). Alias workaround is
+forward-compatible — it costs nothing once the underlying extraction
+stops collapsing.
+
+**General rule:** any packaging step that runs on macOS HFS+ should
+be checked for case collisions on identifiers known to differ only
+in case. Toolbox Pascal naming vs lowercase C convention is the
+classic offender; OpenStep/Foundation Naming vs POSIX is another.
+
+### Library whitelist
+
+`lib/` ships many archives; only a few are referenced by a C-only
+Retro68 link. The bundle whitelist:
+
+  libretrocrt.a + libInterface.a + libc.a + libm.a
+
+Excludes:
+- `libstdc++.a` (17 MB) — C++ STL, not used.
+- `libsupc++.a` (1 MB) — C++ runtime support.
+- `libg.a` (5 MB) — debug duplicate of libc.
+- `libNavigation.far.a` / `libRetroConsole.a` — niche, not in default link.
+- Full `ldscripts/` subdir — we ship only `retro68-flat.ld` (single ld
+  script wired to `_MULTISEG_APP = 0`).
+
+That keeps the libs blob at 7.2 MB raw / 1.1 MB brotli. If a future
+sample needs C++ or RetroConsole, expand the whitelist; if a real
+program references math symbols beyond libm, the link will fail
+loudly and we add the next archive.
