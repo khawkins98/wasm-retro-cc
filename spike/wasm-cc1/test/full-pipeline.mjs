@@ -3,15 +3,23 @@
  * Phase 2.3d — full in-browser pipeline end-to-end test.
  *
  * Pipes hello_toolbox.c through all four wasm tools and produces a
- * .bin in MEMFS. The four tools are:
+ * single-fork MacBinary II APPL in MEMFS. The four tools are:
  *
  *   cc1.wasm     :  .c -> .s    (already byte-identical to native)
  *   as.wasm      :  .s -> .o    (already byte-identical to native)
  *   ld.wasm      :  .o + libs + ldscript -> .gdb (m68k ELF executable)
- *   Elf2Mac.wasm :  .gdb -> .bin (MacBinary II APPL)
+ *   Elf2Mac.wasm :  .gdb -> .bin (MacBinary II APPL — single-fork)
  *
- * Done criterion: the output .bin passes inspect_macbinary.py and
- * diffs ~equivalent to the Phase 2.0 reference hello-toolbox-retro68.bin.
+ * Done criterion: the output .bin passes
+ * `spike-pcc/inspect_macbinary.py` (APPL + CODE 0 + CODE 1+ + DATA +
+ * RELA, below_a5 > 0). End-to-end byte-equivalence to the Phase 2.0
+ * reference `hello-toolbox-retro68.bin` is **not** a goal here — the
+ * reference is built with Retro68's CMake `add_application` flow
+ * which emits extra resources (SIZE from Rez, more CODE segments from
+ * the dynamically-generated multi-seg ld script) that this pipeline
+ * doesn't replicate yet. Boot-level equivalence is the next step;
+ * see LEARNINGS.md "Phase 2.3d — first end-to-end .bin" for the gap
+ * analysis and what would close it.
  *
  * Run:
  *   node spike/wasm-cc1/test/full-pipeline.mjs
@@ -133,18 +141,36 @@ const elfBytes = ld.Module.FS.readFile("/tmp/out.gdb");
 console.log(`[pipeline] /tmp/out.gdb (ELF executable): ${elfBytes.length} bytes`);
 
 // ── 4. Elf2Mac.wasm: ELF → MacBinary II ─────────────────────────
+//
+// Output-path quirk (caught 2026-05-15, Phase 2.3d). Elf2Mac calls
+// `ResourceFile::write(path, autodetect)` which `assign(path)`s a
+// format based on `path.extension()`:
+//
+//   .bin → Format::macbin       (single-fork MacBinary II APPL — what we want)
+//   .as  → Format::applesingle
+//   .dsk → Format::diskimage
+//   <other / no ext> → Format::basilisk on non-__APPLE__ hosts
+//                       (split fork: data + .rsrc/<name> + .finf/<name>)
+//
+// We're a node host (not __APPLE__ in Elf2Mac's preprocessor sense),
+// so anything without `.bin` falls through to basilisk — the failure
+// mode this pipeline used to hit when calling with `-o /tmp/out`.
+//
+// Also note: Elf2Mac reads the input ELF from `outputFile + ".gdb"`
+// (legacy hangover from when it spawned the real ld and named its
+// output `.gdb`). Convert-only mode preserves that convention, so we
+// stage the linked ELF at `/tmp/out.bin.gdb` and ask Elf2Mac to emit
+// `/tmp/out.bin`.
 const e2m = await loadTool(E2M_MJS, "Elf2Mac");
-e2m.Module.FS.writeFile("/tmp/out.gdb", elfBytes);
-// Elf2Mac in convert-only mode (RealLD stubbed). It expects an ELF at
-// outputFile + ".gdb" — we pass "-o /tmp/out" so it looks for
-// /tmp/out.gdb (which we just wrote) and emits /tmp/out.bin.
+e2m.Module.FS.writeFile("/tmp/out.bin.gdb", elfBytes);
 rc = runMain(e2m, [
   "--elf2mac",
-  // Default multi-segment mode (no --mac-flat). Produces outputFile.bin
-  // — the MacBinary II APPL Elf2Mac normally emits when invoked by the
-  // Retro68 ld driver. Flat mode writes a single CODE blob without the
-  // MacBinary wrapper, which is not what we want.
-  "-o", "/tmp/out",
+  // Default multi-segment mode (no --mac-flat / --mac-single).
+  // --mac-flat writes a single CODE blob without the MacBinary wrapper.
+  // --mac-single calls SingleSegmentApp() which produces a structurally
+  //  invalid binary (below_a5=0) on a libretrocrt-linked ELF — verified
+  //  via spike-pcc/inspect_macbinary.py.
+  "-o", "/tmp/out.bin",
 ]);
 if (rc !== 0) { console.error("[pipeline] Elf2Mac failed"); process.exit(rc); }
 
@@ -174,3 +200,36 @@ try {
 }
 writeFileSync(OUT_BIN, binBytes);
 console.log(`[pipeline] PASS: wrote ${OUT_BIN} (${binBytes.length} bytes)`);
+
+// ── 5. Structural validation ─────────────────────────────────────
+//
+// `spike-pcc/inspect_macbinary.py` is the Phase 1 structural inspector
+// — it understands MacBinary II layout, the resource map, and the
+// CODE 0 jump-table fields (above_a5 / below_a5 / jt_size /
+// jt_entries) that the classic Mac Process Manager actually reads on
+// launch. A PASS here means the artefact is *shaped* like a bootable
+// APPL — it doesn't prove the runtime won't trap-3 on entry, but it
+// rules out the structural failures the inspector knows about.
+//
+// We invoke the inspector via the host's python3 rather than wiring
+// up a JS port — the inspector is a few hundred LOC and lives in
+// spike-pcc/ for reasons that predate Phase 2 (it's the same
+// inspector PR #14's CI uses). Re-running it from JS gives us the
+// canonical answer with one source of truth.
+try {
+  const { spawnSync } = await import("node:child_process");
+  const r = spawnSync(
+    "python3",
+    [resolve(ROOT, "spike-pcc/inspect_macbinary.py"), OUT_BIN],
+    { encoding: "utf8" },
+  );
+  console.log(`[pipeline] inspect_macbinary.py:`);
+  for (const l of (r.stdout || "").trim().split("\n")) console.log(`  ${l}`);
+  if (r.stderr) console.log(`  stderr: ${r.stderr.trim()}`);
+  if (r.status !== 0) {
+    console.error(`[pipeline] FAIL: inspect_macbinary.py exit ${r.status}`);
+    process.exit(r.status ?? 1);
+  }
+} catch (e) {
+  console.warn(`[pipeline] WARN: could not run inspect_macbinary.py: ${e.message}`);
+}
