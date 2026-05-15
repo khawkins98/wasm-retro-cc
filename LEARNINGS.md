@@ -2441,3 +2441,78 @@ explicit about three things that drivers do for you:
 3. **`libgcc.a` is not optional** for C programs on m68k. The compiler
    emits calls to soft-fp/-divide helpers that the rest of the C
    runtime doesn't provide.
+
+---
+
+## Follow-up: even with start.c.obj linked, PROVIDE still wins (2026-05-15 PM)
+
+The fix above (link `start.c.obj` first) was *necessary* but not *sufficient*.
+First eyes-on test on the deployed playground showed the resulting binary
+still launches-and-exits — the trampoline still jumped to the fallback RTS,
+not libretrocrt's real `_start`.
+
+### What I expected vs what happens
+
+The GNU ld manual says `PROVIDE`:
+
+> "The PROVIDE keyword can be used to define a symbol only when it is
+> referenced and *not defined in the input or output files*."
+
+So with `start.c.obj` linked in (defining a strong `_start`), PROVIDE should
+*skip*. It doesn't, on the bare-ld + `-T script` invocation we use. The
+trampoline's `LONG(_start - _entry_trampoline - 6)` resolves to 6 (= fallback
+location at offset 16 in CODE 1), not 0x1916 (= libretrocrt's real `_start`
+~6 KB into the section). PROVIDE wins regardless.
+
+I haven't fully diagnosed *why* — likely either:
+- The script's PROVIDE is processed before archive scanning has fully
+  unified all input symbols, so at script-eval time `_start` is still
+  undefined from ld's POV.
+- Or some GNU-ld quirk with `PROVIDE` having higher precedence than a
+  pulled archive symbol when both define the same name at the address
+  the PROVIDE evaluates to.
+
+Either way, the practical fix is to remove the PROVIDE entirely.
+
+### Fix
+
+Ship a patched copy of `retro68-flat.ld` (named `retro68-flat-cv.ld`) with
+the `PROVIDE(_start = .)` line replaced by a comment. The bundle packer
+extracts the stock script, applies the regex transform, and writes the
+patched script:
+
+  - Into `sysroot-libs.bin` (under `ld/retro68-flat-cv.ld`) for the cv-mac
+    consumer.
+  - Onto disk at `sysroot/ld/retro68-flat-cv.ld` for the spike's NODEFS-
+    mounted `full-pipeline.mjs`.
+
+Both `full-pipeline.mjs` and `verify-show-asm-bundle.mjs` updated to pass
+`-T /sysroot/ld/retro68-flat-cv.ld`.
+
+### Empirical signal
+
+Before patch (trampoline at offset 4 in CODE 1, offset-value at offset 12):
+
+  bytes 12-15: 00 00 00 06   →   _start = trampoline + 6 + 6 = offset 16
+                                  bytes 16-17:  4e 75   ← fallback RTS
+
+After patch:
+
+  bytes 12-15: 00 00 19 16   →   _start = trampoline + 6 + 0x1916 = offset 6432
+                                  bytes 6432+:  4f ef ff f4 48 e7 1f 3a …
+                                                ← libretrocrt's real prologue
+
+The Retro68-reference binary has `0x12` at that position (its real `_start`
+is ~24 bytes past the trampoline since it's a multi-segment app with extra
+trampoline machinery). Same shape, different magnitude.
+
+### Lesson
+
+`PROVIDE` is not as conservative as the manual's wording suggests for bare-ld
+links. If you can't audit the linker's exact behaviour, **don't trust PROVIDE
+to defer to your strong symbols** — patch the script to remove the PROVIDE
+and rely entirely on your input objects.
+
+Compiler drivers (`m68k-apple-macos-gcc`, `gcc`, …) get this right because
+they pre-link the runtime objects internally and arrange the symbol table
+*before* the script's PROVIDEs are evaluated. Bare ld doesn't.

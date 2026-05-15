@@ -144,7 +144,12 @@ ld.Module.FS.writeFile("/tmp/in.o", oBytes);
 //      (`__udivsi3`, `__mulsi3`, …) that libretrocrt's syscalls.c
 //      transitively needs.
 rc = runMain(ld, [
-  "-T", "/sysroot/ld/retro68-flat.ld",
+  // Patched script — same content as retro68-flat.ld minus the
+  // `PROVIDE(_start = .)` line. The PROVIDE fallback pre-empts
+  // libretrocrt's real `_start` and routes the entry trampoline to a
+  // bare RTS, so `main` never runs. See LEARNINGS "Phase 2.3d —
+  // PROVIDE(_start) pre-empts libretrocrt".
+  "-T", "/sysroot/ld/retro68-flat-cv.ld",
   "-L", "/sysroot/lib",
   "--no-warn-rwx-segments",
   "-o", "/tmp/out.gdb",

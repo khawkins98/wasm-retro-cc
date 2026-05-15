@@ -144,6 +144,38 @@ const LD_SUBTREE = "ld";
 // satisfies `_start` ahead of the script's PROVIDE.
 const START_OBJ_BASENAME = "start.c.obj";
 
+// Retro68's stock `retro68-flat.ld` defines a `PROVIDE(_start = .)`
+// fallback at the address immediately after the entry trampoline (a
+// bare RTS). The comment in the script says "needed for libretro
+// bootstrap" — and PROVIDE is supposed to fire only when `_start` is
+// referenced and *not* defined by any included object. In practice, on
+// our standalone-`ld` link, it fires anyway, even with
+// `libretrocrt.a:start.c.obj` linked in (start.c.obj defines a strong
+// `_start` that we link explicitly). The trampoline's
+// `LONG(_start - _entry_trampoline - 6)` then resolves to the fallback
+// RTS instead of libretrocrt's real entry point, and `main` never runs.
+//
+// Verified empirically: removing the `PROVIDE(_start = .)` line makes
+// the trampoline's offset value jump from 0x6 (the fallback) to ~0x1916
+// (libretrocrt's real `_start`, ~6 KB into CODE 1). With the PROVIDE
+// gone, the binary boots cleanly on the deployed cv-mac emulator.
+//
+// We ship a patched copy as a separate name so we don't override the
+// Retro68 stock script (which may be needed as-is by other consumers).
+// The bundle's libs blob will route the consumer's `-T` flag to this
+// patched version.
+const LD_SCRIPT_PATCH = {
+  source: "ld/retro68-flat.ld",
+  output: "ld/retro68-flat-cv.ld",
+  /** Replace the PROVIDE line with a comment that explains why. */
+  transform: (text) =>
+    text.replace(
+      /PROVIDE\(_start = \.\);[^\n]*/,
+      "/* cv-mac patch: PROVIDE(_start = .) removed — was pre-empting " +
+        "libretrocrt's real _start; see LEARNINGS 2026-05-15. */",
+    ),
+};
+
 function ensureExists(p) {
   if (!statSync(p, { throwIfNoEntry: false })) {
     throw new Error(
@@ -328,6 +360,47 @@ const libs = packBlob("sysroot-libs.bin", "sysroot-libs.index.json", {
     return false;
   },
 });
+
+// 2b.5. Patch the ld script — see LD_SCRIPT_PATCH's doc comment for
+// the full rationale. We re-pack the libs blob with the patched script
+// appended as a separate entry at `ld/retro68-flat-cv.ld`. The stock
+// `ld/retro68-flat.ld` stays in the blob unchanged for consumers that
+// want it.
+{
+  const stockBytes = readFileSync(
+    resolve(SYSROOT_SRC, LD_SCRIPT_PATCH.source),
+  );
+  const patchedText = LD_SCRIPT_PATCH.transform(stockBytes.toString("utf8"));
+  const patchedBytes = Buffer.from(patchedText, "utf8");
+  // Append to libs blob (same trick we use for start.c.obj just below).
+  const libsBin = readFileSync(join(OUT_DIR, "sysroot-libs.bin"));
+  const libsIndex = JSON.parse(
+    readFileSync(join(OUT_DIR, "sysroot-libs.index.json"), "utf8"),
+  );
+  libsIndex.push({
+    p: LD_SCRIPT_PATCH.output,
+    o: libsBin.length,
+    l: patchedBytes.length,
+  });
+  const newLibs = Buffer.concat([libsBin, patchedBytes]);
+  writeFileSync(join(OUT_DIR, "sysroot-libs.bin"), newLibs);
+  writeFileSync(
+    join(OUT_DIR, "sysroot-libs.index.json"),
+    JSON.stringify(libsIndex),
+  );
+  libs.blob = new Uint8Array(newLibs);
+  libs.indexEntries = libsIndex;
+  // Side-effect: also write the patched script to the source sysroot
+  // so the spike's full-pipeline.mjs (which mounts via NODEFS) can use
+  // it directly.
+  writeFileSync(
+    resolve(SYSROOT_SRC, LD_SCRIPT_PATCH.output),
+    patchedBytes,
+  );
+  console.log(
+    `[bundle] sysroot-libs.bin           +${patchedBytes.length} B for ${LD_SCRIPT_PATCH.output} (PROVIDE(_start) removed)`,
+  );
+}
 
 // 2c. Extract `start.c.obj` from `libretrocrt.a` and append it to the
 //     libs blob as a standalone entry at `lib/start.c.obj`. We append
