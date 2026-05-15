@@ -1,9 +1,12 @@
 # spike/wasm-cc1/ — Phase 2.1 cc1 → WASM port
 
-> **Status (2026-05-14): scaffold landed; first build attempt pending.**
-> Tracker: [#11](https://github.com/khawkins98/wasm-retro-cc/issues/11)
-> sub-spike 2.1. Phase 2.0 (vendored Retro68 GCC artefact derisk) is
-> complete — see [`../README.md`](../README.md).
+> **Status (2026-05-15): shipped.** `cc1.wasm` (3.3 MB brotli) compiles
+> classic Mac C → m68k assembly byte-identical to native, runs in
+> browser via MEMFS, and is integrated end-to-end in the
+> [classic-vibe-mac](https://github.com/khawkins98/classic-vibe-mac)
+> playground. Phase 2 master tracker
+> [#11](https://github.com/khawkins98/wasm-retro-cc/issues/11) closed;
+> forward-looking work in [cv-mac #100](https://github.com/khawkins98/classic-vibe-mac/issues/100).
 
 The goal of this sub-spike is the central engineering bet of the
 project: take `m68k-apple-macos-cc1` (the C compiler proper from
