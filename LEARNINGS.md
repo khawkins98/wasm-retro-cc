@@ -2516,3 +2516,85 @@ and rely entirely on your input objects.
 Compiler drivers (`m68k-apple-macos-gcc`, `gcc`, …) get this right because
 they pre-link the runtime objects internally and arrange the symbol table
 *before* the script's PROVIDEs are evaluated. Bare ld doesn't.
+
+---
+
+## Follow-up: the *flat* ld script is fundamentally wrong for libretrocrt (2026-05-15 PM)
+
+After fixing the PROVIDE issue and adding the SIZE resource (cv-mac
+#87), the wasm-hello binary *still* crashed at app launch with a
+type-3 dialog ("application 'unknown' has unexpectedly quit"). The
+"unknown" name was the tell — Mac OS was failing before it could
+resolve the app from its resource fork.
+
+### Root cause
+
+`retro68-flat.ld` (which we'd been using all along) sets
+`_MULTISEG_APP = 0` and lays out a single `.text` section containing
+everything. **libretrocrt's `_start` was written for the multi-seg
+case** — it expects the linker to have produced named sections
+`.code00001`, `.code00002`, … one per `SegmentInfo`, which Elf2Mac
+then walks at convert time to populate the CODE×N resources. Single
+`.text` confuses the runtime relocator: it can't find the per-segment
+A5 offsets it needs, applies relocations to wrong addresses, corrupts
+the jump table, and the next branch lands on garbage.
+
+### Confirmed via inspect_macbinary fingerprint
+
+|                     | flat script (broken)  | multi-seg script (fixed) | Retro68 reference |
+|---------------------|-----------------------|--------------------------|-------------------|
+| Resource types      | `CODE×2, DATA×1, RELA×2` | `CODE×9, DATA×1, RELA×9` | `CODE×9, DATA×1, RELA×9, SIZE×1` |
+| `below_a5`          | 1176                  | 1420                     | 1428              |
+| `_MULTISEG_APP`     | 0                     | 1                        | 1                 |
+| Boot status         | type-3 on launch      | (needs eyes-on)          | works             |
+
+Within 8 bytes of `below_a5` and identical resource-type counts to the
+reference (modulo SIZE which we splice separately).
+
+### How we got the right script
+
+`m68k-apple-macos-gcc`'s real link command path doesn't use a static
+script at all — it passes `-elf2mac` to `m68k-apple-macos-ld`, which
+is a wrapper that runs Elf2Mac. Elf2Mac in its default `--elf2mac`
+mode calls `SegmentMap::CreateLdScript` (in `LdScript.cc`) to emit a
+dynamic script tailored to the default SegmentMap, writes it to
+`/tmp/ldscriptXXXXXX`, and feeds that to the real ld.
+
+For our pipeline we don't run RealLD inside Elf2Mac (it's stubbed in
+convert-only mode), so we never received that script. The result was
+that we linked with the wrong (flat) layout and Elf2Mac then tried to
+convert assuming multi-seg layout.
+
+### The fix
+
+Capture the script Elf2Mac generates and ship it as a static asset.
+The default `SegmentMap` is hard-coded in `SegmentMap.cc`'s default
+constructor, and the `_start` entry symbol is fixed for Retro68
+builds — so the output script is deterministic and project-
+independent. Ship as `/sysroot/ld/retro68-multiseg.ld` alongside the
+existing `retro68-flat.ld` (still useful for non-libretrocrt use
+cases).
+
+Capture procedure (one-shot, baked into the bundle build):
+
+  1. Pipe any C source through cc1+as+ld(flat)+Elf2Mac.
+  2. Invoke Elf2Mac with `--mac-keep-ldscript` — emits the multi-seg
+     script to `/tmp/ldscriptXXXXXX` AND prints the path to stderr.
+  3. Copy the script bytes from MEMFS to disk.
+
+Today this lives in `spike/wasm-cc1/build/sysroot/ld/retro68-multiseg.ld`
+and the bundle packer ships it under the same path. Long-term cleaner
+fix: have cv-mac's `compileToBin` invoke Elf2Mac twice (once with
+`--mac-keep-ldscript` to extract the script, then run ld with that
+script, then Elf2Mac again to convert). That removes the static
+dependency on the captured script. Deferred — the static script is
+deterministic for our use cases.
+
+### General rule
+
+When porting a Mac runtime crt to a bare-ld environment, the **runtime
+crt and the ld script are a matched pair**. Don't mix-and-match a
+"simple" flat script with a "real" runtime crt — the crt makes layout
+assumptions the script must satisfy. If a runtime expects multi-seg,
+use multi-seg; the script's job is to encode the layout the runtime
+walks at startup.

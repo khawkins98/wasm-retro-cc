@@ -144,12 +144,14 @@ ld.Module.FS.writeFile("/tmp/in.o", oBytes);
 //      (`__udivsi3`, `__mulsi3`, …) that libretrocrt's syscalls.c
 //      transitively needs.
 rc = runMain(ld, [
-  // Patched script — same content as retro68-flat.ld minus the
-  // `PROVIDE(_start = .)` line. The PROVIDE fallback pre-empts
-  // libretrocrt's real `_start` and routes the entry trampoline to a
-  // bare RTS, so `main` never runs. See LEARNINGS "Phase 2.3d —
-  // PROVIDE(_start) pre-empts libretrocrt".
-  "-T", "/sysroot/ld/retro68-flat-cv.ld",
+  // Multi-segment ld script (Elf2Mac's dynamically-generated default
+  // for `--elf2mac` mode, captured to a static file). libretrocrt's
+  // _start expects multi-seg layout — using the flat script crashes
+  // at launch with type-3 because the runtime relocator can't find
+  // its named .code00001/.code00002/... sections. The flat script
+  // remains shipped for non-libretrocrt use cases. See LEARNINGS
+  // "Phase 2.3d — multi-seg ld script is mandatory for libretrocrt".
+  "-T", "/sysroot/ld/retro68-multiseg.ld",
   "-L", "/sysroot/lib",
   "--no-warn-rwx-segments",
   "-o", "/tmp/out.gdb",

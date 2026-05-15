@@ -80,6 +80,20 @@ const AS_BUILD = resolve(ROOT, "spike/wasm-binutils/build/stage2/gas");
 const LD_BUILD = resolve(ROOT, "spike/wasm-binutils/build/stage2/ld");
 const E2M_BUILD = resolve(ROOT, "spike/wasm-elf2mac/build/stage2/Elf2Mac");
 const SYSROOT_SRC = resolve(ROOT, "spike/wasm-cc1/build/sysroot");
+
+// Tracked copy of the multi-seg ld script that Elf2Mac would emit
+// dynamically in `--elf2mac` mode. Captured once via
+// `--mac-keep-ldscript` (see LEARNINGS "Phase 2.3d — multi-seg ld
+// script is mandatory for libretrocrt") and committed at a stable path
+// outside the gitignored build/ tree.
+//
+// The script is deterministic for a given Retro68 build (default
+// SegmentMap in SegmentMap.cc + fixed _start entry symbol) so a static
+// asset is appropriate. If we ever regenerate from an upstream
+// Retro68 update, re-capture by piping any C source through
+// cc1+as+ld(flat)+Elf2Mac with `--mac-keep-ldscript` and overwriting
+// this file with the resulting /tmp/ldscriptXXXXXX bytes.
+const MULTISEG_LD_SCRIPT_SRC = resolve(ROOT, "spike/wasm-cc1/retro68-multiseg.ld");
 const OUT_DIR = resolve(ROOT, "dist/show-asm");
 
 // Tool artefacts to ship.  Each entry: [src_dir, mjs_basename, wasm_basename].
@@ -349,7 +363,23 @@ const headers = packBlob("sysroot.bin", "sysroot.index.json", {
 const libs = packBlob("sysroot-libs.bin", "sysroot-libs.index.json", {
   subtrees: [LIB_SUBTREE, LD_SUBTREE],
   keepEntry: (rel) => {
-    if (rel.startsWith("ld/")) return rel === "ld/retro68-flat.ld";
+    // Both ld scripts we care about:
+    //   retro68-flat.ld     — stock Retro68 single-segment script,
+    //                         kept for archival / non-libretrocrt use
+    //   retro68-multiseg.ld — multi-segment script Elf2Mac generates
+    //                         dynamically from its default SegmentMap.
+    //                         This is the one libretrocrt's _start
+    //                         actually expects (`_MULTISEG_APP = 1`).
+    //                         Using the flat script with libretrocrt
+    //                         crashes at app launch with type-3
+    //                         because the runtime relocator can't find
+    //                         its named `.code00001`/`.code00002`/...
+    //                         sections in the linked output.
+    //                         See LEARNINGS "Phase 2.3d — multi-seg ld
+    //                         script is mandatory for libretrocrt".
+    if (rel.startsWith("ld/")) {
+      return rel === "ld/retro68-flat.ld" || rel === "ld/retro68-multiseg.ld";
+    }
     if (rel.startsWith("lib/")) {
       // Whitelist only top-level archives by basename. lib/ldscripts/ and
       // any other subdirs are dropped.
@@ -399,6 +429,40 @@ const libs = packBlob("sysroot-libs.bin", "sysroot-libs.index.json", {
   );
   console.log(
     `[bundle] sysroot-libs.bin           +${patchedBytes.length} B for ${LD_SCRIPT_PATCH.output} (PROVIDE(_start) removed)`,
+  );
+}
+
+// 2b.6. Copy the multi-segment ld script into the source sysroot
+// (so the spike's NODEFS-mounted full-pipeline.mjs sees it) and
+// append it to the libs blob (so the cv-mac consumer sees it). Same
+// "two delivery paths from one canonical source" pattern as start.c.obj.
+{
+  const multisegBytes = readFileSync(MULTISEG_LD_SCRIPT_SRC);
+  // Side-effect write to source sysroot for spike use.
+  writeFileSync(
+    resolve(SYSROOT_SRC, "ld/retro68-multiseg.ld"),
+    multisegBytes,
+  );
+  // Append to libs blob.
+  const libsBin = readFileSync(join(OUT_DIR, "sysroot-libs.bin"));
+  const libsIndex = JSON.parse(
+    readFileSync(join(OUT_DIR, "sysroot-libs.index.json"), "utf8"),
+  );
+  libsIndex.push({
+    p: "ld/retro68-multiseg.ld",
+    o: libsBin.length,
+    l: multisegBytes.length,
+  });
+  const newLibs = Buffer.concat([libsBin, multisegBytes]);
+  writeFileSync(join(OUT_DIR, "sysroot-libs.bin"), newLibs);
+  writeFileSync(
+    join(OUT_DIR, "sysroot-libs.index.json"),
+    JSON.stringify(libsIndex),
+  );
+  libs.blob = new Uint8Array(newLibs);
+  libs.indexEntries = libsIndex;
+  console.log(
+    `[bundle] sysroot-libs.bin           +${multisegBytes.length} B for ld/retro68-multiseg.ld`,
   );
 }
 

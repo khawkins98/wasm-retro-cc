@@ -207,9 +207,10 @@ console.log(`[verify]   as:  ${oBytes.length} B .o`);
 const ld = await loadTool("ld.mjs", { mountHeaders: false, mountLibs: true });
 ld.Module.FS.writeFile("/tmp/in.o", oBytes);
 rc = callMain(ld, [
-  // Patched script (PROVIDE(_start = .) removed); see LEARNINGS
-  // "Phase 2.3d — PROVIDE(_start) pre-empts libretrocrt".
-  "-T", "/sysroot/ld/retro68-flat-cv.ld",
+  // Multi-segment script — libretrocrt's startup expects multi-seg
+  // layout, not flat. See LEARNINGS "Phase 2.3d — multi-seg ld
+  // script is mandatory for libretrocrt".
+  "-T", "/sysroot/ld/retro68-multiseg.ld",
   "-L", "/sysroot/lib",
   "--no-warn-rwx-segments",
   "-o", "/tmp/out.gdb",
