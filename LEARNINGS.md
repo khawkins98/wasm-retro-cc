@@ -1955,29 +1955,78 @@ Available on the host via `libelf-dev` (Ubuntu), but:
 
 ### Path forward (Phase 2.3.x — next session)
 
-Three viable approaches; preference is **(a)** for size + clarity:
+Three viable approaches; updated preference after a libelf-for-wasm
+attempt:
 
-**(a) Build libelf for wasm.** Get `elfutils` source from
-[sourceware](https://sourceware.org/elfutils/), apply the standard
-Canadian-cross treatment (CONFIG_SITE, `--host=wasm32-emscripten`,
-`--disable-debuginfod` + `--disable-libdebuginfod`, `-Os -g0`). Link
-the resulting `libelf.a` into the wasm Elf2Mac. Estimated effort:
-1-3 hours, mostly autoconf iteration following the Phase 2.1/2.2
-playbook.
+**(a) Build libelf for wasm via elfutils — attempted, hit secondary
+walls.** Scaffolding shipped (`spike/wasm-elf2mac/build.sh libelf` +
+`build-libelf-inner.sh`, elfutils 0.190 source pinned). Progress:
 
-**(b) Hand-roll a minimal ELF parser.** Elf2Mac uses ~12 libelf
-calls. Replace them with direct struct reads against `elf.h` (which
-emcc has). Cuts the dependency, but introduces hand-written ELF
-parsing code we have to maintain forever. Less attractive long-term.
+- ✅ Heredoc-via-separate-script pattern dodges the bash-quote-escape
+  rabbit hole that bit our first try at embedding configure inline.
+- ✅ `-sUSE_ZLIB=1` in CFLAGS satisfies elfutils' `gzdirect` link
+  probe (Emscripten's bundled zlib port).
+- ✅ `bash $(find -name config.guess)` finds the script in elfutils'
+  source layout (config/config.guess, not top-level).
+- ❌ Configure fails at "failed to find argp_parse". `argp_parse` is
+  glibc-specific (GNU argument-parsing library, no portable POSIX
+  equivalent). Emscripten's musl-derived libc doesn't provide it.
+
+Next move for (a): vendor a portable `argp-standalone` library and
+either point `--with-argp-standalone` at it (if elfutils' configure
+accepts that) or pre-build it as a wasm `.a` and add to LDFLAGS.
+`argp-standalone` is small (~1500 LOC), self-contained C. Adds ~1
+hour of work; may then expose further glibc-isms in elfutils.
+
+**Decision update:** (a) has proven harder than initially estimated.
+Switching preference to (b) for the next attempt:
+
+**(b) Hand-roll a minimal ELF parser.** Elf2Mac uses a closed set of
+~12 libelf calls (`elf_begin`, `elf_kind`, `elf_getshdr`,
+`elf_nextscn`, `elf_strptr`, `gelf_getshdr`, `gelf_getsym`,
+`elf_getdata`, `elf_errmsg`, `elf_end`, `elf_version`,
+`elf_setshstrndx`). All do straightforward reads against the ELF
+struct layout (which `elf.h` from the kernel headers gives us — and
+emcc ships this). A ~300 LOC `MinimalElf.cc` shim that implements
+just these functions over a memory-mapped buffer would unblock
+Elf2Mac with zero further dependencies. Easier than fighting
+elfutils' build tree.
 
 **(c) Defer and use a Docker call-out.** Until Elf2Mac is in-browser,
 the playground could keep using the Phase 2.0 vendoring path: cv-mac
 fetches CI-built `.bin` files. That ships Phase 2 partial but loses
 the "compile in browser end-to-end" promise.
 
-**Decision (paused-here):** Go with (a) when picking this back up.
-The libelf source is ~10 K LOC; same wasm-cross pattern; no novel
-landmines expected.
+**Decision (paused-here):** Pick (b) next session — 300-LOC of
+hand-rolled ELF read is more bounded than libelf's transitive deps.
+Document `MinimalElf.cc` against the closed set of 12 libelf calls
+Elf2Mac actually uses (grep `Elf2Mac/*.cc` for `elf_` / `gelf_`).
+
+### Phase 2.3 — landmines documented before next attempt
+
+Things we've learned the hard way and should not repeat:
+
+1. **Boost.Filesystem requires compiled lib.** Replace with
+   `std::filesystem` for C++17 projects. One-file mechanical port
+   for ResourceFile.cc.
+2. **`<boost/filesystem.hpp>` pulls in `<vector>`, `<functional>`,
+   `<algorithm>` transitively.** When swapping it for `<filesystem>`
+   you must add them explicitly or compile fails on `std::vector`
+   not found.
+3. **CMake's emscripten toolchain restricts include search to wasm
+   sysroot.** Setting `-DBoost_INCLUDE_DIR=/usr/include` is too
+   broad — pulls host glibc bits. Stage Boost headers into a
+   dedicated dir under the build tree, point at that.
+4. **`find_library(HFS_LIBRARY NAMES hfs)` followed by
+   `target_link_libraries(... ${HFS_LIBRARY})` errors out as
+   NOTFOUND in CMake.** Pre-set the variable to a target name (or
+   empty string in safe contexts) to bypass.
+5. **elfutils requires `argp_parse`.** Glibc-only. Emscripten musl
+   doesn't provide it. Use `argp-standalone` or hand-roll ELF
+   parsing.
+6. **Bash heredoc-in-heredoc with CFLAGS quoting is a quote-escape
+   trap.** Use a separate inner script file invoked via
+   `run_in_container "bash /path/to/inner.sh"`.
 
 ### Bytes-of-progress summary
 

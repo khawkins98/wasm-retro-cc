@@ -128,6 +128,30 @@ add_subdirectory(/Retro68/Elf2Mac ${CMAKE_CURRENT_BINARY_DIR}/Elf2Mac)
 CMAKE
 }
 
+# Build libelf for wasm — needed by Elf2Mac for ELF parsing
+# (gelf_getshdr, elf_nextscn, etc.). Emscripten's port catalog
+# doesn't ship libelf. We grab the libelfin source (a slim libelf
+# replacement that builds with just a C compiler — no autoconf/libtool)
+# and compile it with emcc into a static archive.
+#
+# Source: https://github.com/aclements/libelfin — header-only wrapper
+# over libelf. NOT what we want — Elf2Mac uses the gelf.h API
+# directly.
+#
+# Better choice: elfutils' libelf. Standard autoconf, ~10K LOC. We
+# fetch the source tarball and emconfigure-build it the same way as
+# binutils' libbfd.
+ELFUTILS_VERSION=0.190
+
+cmd_libelf() {
+  check_image
+  mkdir -p "${BUILD_DIR}/libelf"
+  # Heredoc-via-separate-script. Embedding elfutils configure directly
+  # in run_in_container's heredoc kept breaking the host bash parser
+  # around the CFLAGS line. Keep the inner script in its own file.
+  run_in_container "ELFUTILS_VERSION=${ELFUTILS_VERSION} bash /spike/build-libelf-inner.sh"
+}
+
 cmd_stage1() {
   check_image
   mkdir -p "${STAGE1_DIR}"
@@ -245,10 +269,11 @@ cmd_smoke() {
 cmd_clean() { rm -rf "${BUILD_DIR}"; }
 
 case "${1:-stage1}" in
+  libelf) cmd_libelf ;;
   stage1) cmd_stage1 ;;
   stage2) cmd_stage2 ;;
   relink) cmd_relink ;;
   smoke)  cmd_smoke ;;
   clean)  cmd_clean ;;
-  *) echo "usage: $0 [stage1|stage2|relink|smoke|clean]" >&2; exit 2 ;;
+  *) echo "usage: $0 [libelf|stage1|stage2|relink|smoke|clean]" >&2; exit 2 ;;
 esac
