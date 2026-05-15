@@ -121,10 +121,10 @@ SITE
         2>&1 | tee configure.log | tail -100
     fi
 
-    echo '[stage2] building as + ld with emmake (-k so unrelated tool failures don't kill our targets)'
+    echo '[stage2] building as + ld with emmake (-k so unrelated tool failures do not kill our targets)'
     export CONFIG_SITE=/spike/build/stage2/config.site
     emmake make -k -j\"\$(nproc)\" all-gas all-ld 2>&1 | tee build.log | tail -50
-    # Per Phase 2.1 pattern: don't trust make's exit code, check artefacts.
+    # Per Phase 2.1 pattern, do not trust make exit code; check artefacts.
     true
   "
 }
