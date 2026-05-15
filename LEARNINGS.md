@@ -1839,3 +1839,79 @@ dodge finalize OOM, manual relink for wasm flags, etc.) all transfer.
 - `spike/wasm-cc1/build/sysroot/` — vendored Retro68 SDK + GCC builtins
 - `spike/wasm-cc1/build/test/hello_toolbox_wasm.s` — wasm cc1 output
 - `spike/wasm-cc1/build/test/hello_toolbox_native.s` — native cc1 output
+
+
+---
+
+## Phase 2.2 — `as` ported in one shot, byte-identical (2026-05-15, done)
+
+**Status: one-shot success.** The Phase 2.1 lessons transferred so
+cleanly that the binutils stage 2 build succeeded **first try** with
+no iteration — same `CONFIG_SITE` answers, same `-Os -g0`, same
+`make -k`, same manual-relink-for-wasm-flags pattern.
+
+### Sizes
+
+| Artefact | Raw wasm | Brotli |
+| --- | --- | --- |
+| `as.wasm` | 764 KB | 270 KB |
+| `as.mjs`  | 81 KB | — |
+| `ld.wasm` | 1.0 MB | 304 KB |
+| `ld.mjs`  | 80 KB | — |
+
+Phase 2.2 + 2.3 combined = ~574 KB brotli. Plus cc1's 3.3 MB brotli =
+~3.9 MB brotli for the **whole** C → MacBinary toolchain. Comfortably
+under the original 6-8 MB target.
+
+### End-to-end: byte-identical to native `as`
+
+`spike/wasm-binutils/test/assemble.mjs` feeds the Phase 2.1 wasm-cc1
+output (`hello_toolbox_wasm.s`) through the wasm `as`:
+
+```
+as.wasm: -march=68020 hello_toolbox.s -o hello_toolbox.o
+→ 856 bytes, m68k ELF32 big-endian, InitGraf trap (0xa86e) preserved
+```
+
+Diffed against `stage1/gas/as-new` (native cross-as) on identical
+input:
+```
+shasum -a 256 hello_native.o hello_toolbox.o
+a7a22b56…  hello_native.o
+a7a22b56…  hello_toolbox.o    <-- IDENTICAL
+```
+
+Same as cc1 in Phase 2.1: the wasm port is byte-equivalent to the
+native cross-tool. No surprises.
+
+### Relink "lesson" — let make tell us the link command
+
+First relink attempt had hardcoded .o file lists I'd guessed by
+eyeballing Makefile.am. They drifted from reality (`as-new.o` doesn't
+exist; the makefile uses `as.o`, `app.o`, `flonum-*.o`, etc. in a
+different order with different libraries). Fix: invoke
+`emmake make V=1 as-new`, grep the `libtool: link:` line, sed
+`-o as-new` → `-o as.mjs`, eval with extra wasm LDFLAGS appended.
+
+Pattern generalizes: **never hardcode .o lists when the makefile
+knows them.** Capture the link command, mutate the output flag,
+re-execute. Works for any autoconf/libtool project where the build
+system knows the canonical link line.
+
+### What Phase 2.2 reveals about Phase 2.3 (ld)
+
+`ld.wasm` (1.0 MB) and `ld.mjs` (80 KB) **also built in the same
+stage 2 run**. Smoke-tested: `ld --version` prints "GNU ld (GNU
+Binutils) 2.39". The hard part of Phase 2.3 will be:
+
+1. Getting Retro68's `-elf2mac` mode wired in (binutils builds m68k
+   `ld` with extra emulations; `eelf32m68k.o` is the standard m68k
+   emulation, `eelf_m68k_mac.o` would be the Retro68 mac-specific
+   variant — verify present).
+2. Vendoring `libretrocrt.a` + `libInterface.a` + `libc.a` into the
+   sysroot so ld has libs to link against.
+3. Possibly: a separate small `Elf2Mac` port (custom C++ binary
+   outside binutils, in `/Retro68/Elf2Mac/`).
+
+But all the **Canadian-cross machinery is solved.** No new build-
+system iterations expected.

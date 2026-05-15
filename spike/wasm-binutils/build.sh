@@ -134,55 +134,40 @@ cmd_relink() {
     echo "relink needs stage 2 outputs — run 'stage2' first" >&2
     exit 1
   fi
-  echo "[relink] producing as.mjs (and ld.mjs if present) with wasm-aware flags"
+  echo "[relink] producing as.mjs / ld.mjs with wasm-aware flags"
+  # Strategy: capture the real link command from \`make V=1\`, append
+  # our wasm flags, redirect output to .mjs. Hardcoded .o lists drift
+  # against binutils' makefile reality (different names, different
+  # libraries, different orders); using make as source of truth is
+  # the only robust path.
   run_in_container "
     set -euo pipefail
 
-    # Common LDFLAGS — see ../wasm-cc1/README.md for rationale.
-    LDFLAGS_WASM=\"
-      -sALLOW_MEMORY_GROWTH=1
-      -sMAXIMUM_MEMORY=1GB
-      -sINITIAL_MEMORY=128MB
-      -sSUPPORT_LONGJMP=wasm
-      -sLLD_REPORT_UNDEFINED=1
-      -sMODULARIZE=1
-      -sEXPORT_ES6=1
-      -sEXPORTED_FUNCTIONS=_main,_malloc,_free
-      -sEXPORTED_RUNTIME_METHODS=FS,ERRNO_CODES,NODEFS,allocateUTF8,callMain
-      -lnodefs.js
-    \"
+    LDFLAGS_WASM='-sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=1GB -sINITIAL_MEMORY=128MB -sSUPPORT_LONGJMP=wasm -sLLD_REPORT_UNDEFINED=1 -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORTED_FUNCTIONS=_main,_malloc,_free -sEXPORTED_RUNTIME_METHODS=FS,ERRNO_CODES,NODEFS,allocateUTF8,callMain -lnodefs.js'
+    export CONFIG_SITE=/spike/build/stage2/config.site
 
-    # `as` relink. The makefile builds it as gas/as-new. We mirror the
-    # link command but redirect output to as.mjs.
-    if [ -f /spike/build/stage2/gas/as-new ]; then
-      cd /spike/build/stage2/gas
-      echo '[relink] as.mjs'
-      em++ -Os -g0 \\
-        \$LDFLAGS_WASM \\
-        -sEXPORT_NAME=createAS \\
-        -o as.mjs \\
-        as-new.o app.o flonum-konst.o flonum-copy.o flonum-mult.o \\
-        hash.o input-file.o input-scrub.o expr.o symbols.o \\
-        write.o frags.o ehopt.o read.o sb.o macro.o messages.o \\
-        atof-generic.o output-file.o ./../bfd/libbfd.a \\
-        ./../libiberty/libiberty.a \\
-        ./../opcodes/libopcodes.a config/tc-m68k.o config/obj-elf.o \\
-        2>&1 | tail -30 || echo '[relink] as relink failed — likely .o list drift; reconcile via gas/Makefile'
+    # as relink
+    cd /spike/build/stage2/gas
+    rm -f as-new as-new.wasm
+    AS_LINK=\$(emmake make V=1 as-new 2>&1 | grep -E '^libtool: link: /opt/emsdk' | tail -1 | sed -e 's/^libtool: link: //')
+    if [ -n \"\$AS_LINK\" ]; then
+      echo '[relink] as link cmd captured; patching for wasm flags'
+      AS_LINK_PATCHED=\$(echo \"\$AS_LINK\" | sed -e 's/-o as-new /-o as.mjs /g')
+      eval \"\$AS_LINK_PATCHED \$LDFLAGS_WASM -sEXPORT_NAME=createAS\" 2>&1 | tail -10
+    else
+      echo '[relink] FAIL: could not capture as link command'
     fi
 
-    # ld relink. binutils' ld is built as ld/ld-new.
-    if [ -f /spike/build/stage2/ld/ld-new ]; then
-      cd /spike/build/stage2/ld
-      echo '[relink] ld.mjs'
-      em++ -Os -g0 \\
-        \$LDFLAGS_WASM \\
-        -sEXPORT_NAME=createLD \\
-        -o ld.mjs \\
-        ldgram.o ldlex-wrapper.o lexsup.o ldlang.o mri.o ldctor.o \\
-        ldmain.o ldwrite.o ldexp.o ldemul.o ldver.o ldmisc.o \\
-        ldfile.o ldcref.o plugin.o ldbuildid.o eelf32m68k.o \\
-        eelf_m68k.o ./../bfd/libbfd.a ./../libiberty/libiberty.a \\
-        2>&1 | tail -30 || echo '[relink] ld relink failed — likely .o list drift; reconcile via ld/Makefile'
+    # ld relink
+    cd /spike/build/stage2/ld
+    rm -f ld-new ld-new.wasm
+    LD_LINK=\$(emmake make V=1 ld-new 2>&1 | grep -E '^libtool: link: /opt/emsdk' | tail -1 | sed -e 's/^libtool: link: //')
+    if [ -n \"\$LD_LINK\" ]; then
+      echo '[relink] ld link cmd captured; patching for wasm flags'
+      LD_LINK_PATCHED=\$(echo \"\$LD_LINK\" | sed -e 's/-o ld-new /-o ld.mjs /g')
+      eval \"\$LD_LINK_PATCHED \$LDFLAGS_WASM -sEXPORT_NAME=createLD\" 2>&1 | tail -10
+    else
+      echo '[relink] FAIL: could not capture ld link command'
     fi
   "
 
