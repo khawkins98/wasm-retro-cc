@@ -2115,3 +2115,127 @@ Things we've learned the hard way and should not repeat:
 Compiler + assembler + linker = **3.9 MB brotli** in-browser. Even
 with Elf2Mac.wasm added (~150 KB), the full pipeline fits comfortably
 under the original 6-8 MB target.
+
+---
+
+## Phase 2.3d — first end-to-end .bin (2026-05-15)
+
+End-to-end glue done. `spike/wasm-cc1/test/full-pipeline.mjs` now
+pipes `hello_toolbox.c` through cc1 → as → ld → Elf2Mac and emits a
+**single-fork MacBinary II APPL** that passes
+`spike-pcc/inspect_macbinary.py`'s structural check:
+
+```
+type        = b'APPL'
+creator     = b'????'
+data fork   = 20 bytes
+rsrc fork   = 622 bytes
+rsrc types  = CODE×2, DATA×1, RELA×2
+CODE 0      = above_a5=48 below_a5=300 jt_size=16 jt_a5_off=0x20 jt_entries=2
+
+STRUCTURAL CHECK PASSED (APPL, CODE 0+1, below_a5>0, DATA, RELA)
+```
+
+### The fix that made this work (#15.1)
+
+**Pass `-o /tmp/out.bin`, not `-o /tmp/out`.** Elf2Mac calls
+`ResourceFile::write(path, autodetect)`, which decides the on-disk
+shape based on `path.extension()`:
+
+| Extension | Format |
+| --- | --- |
+| `.bin` | `Format::macbin` — single-fork MacBinary II (what we want) |
+| `.as` | `Format::applesingle` |
+| `.dsk` | `Format::diskimage` |
+| *anything else* | `Format::basilisk` on non-`__APPLE__` hosts — splits into `<name>` + `.rsrc/<name>` + `.finf/<name>` |
+
+The wasm host registers as non-`__APPLE__` from Elf2Mac's
+preprocessor POV, so any output path without `.bin` falls through to
+Basilisk-style split forks. Our earlier pipeline run with
+`-o /tmp/out` produced exactly that — three files in `.rsrc/`,
+`.finf/`, plus the bare data — instead of one MacBinary II APPL.
+
+Implication: we do **not** need a fifth wasm tool (wasm-rez or
+hfsutils) to combine forks. Elf2Mac does it natively when asked
+correctly. Saves 300 KB of bundle and a chunk of integration glue.
+
+Also note Elf2Mac's `--mac-single` mode is **wrong** for our
+libretrocrt-linked output — produces `below_a5=0` which fails the
+structural check (Process Manager won't allocate libretrocrt's
+globals). Default segments-mode is what we want, even with a flat
+ld script.
+
+### The 622 B vs 9 KB gap (#15.2)
+
+The reference `hello-toolbox-retro68.bin` (from the Phase 2.0
+Retro68 docker build) has:
+
+```
+rsrc types  = CODE×9, DATA×1, RELA×9, SIZE×1
+data fork   = 0 bytes
+rsrc fork   = 12247 bytes
+below_a5    = 1428
+```
+
+Three real differences vs our 622 B output:
+
+1. **CODE×9 vs CODE×2** — Retro68's CMake build invokes Elf2Mac with
+   its default `SegmentMap` (Runtime + 6 libstdc++/locale segments
+   + Main). Elf2Mac's `CreateLdScript` then emits a multi-segment ld
+   script that splits libs into named output sections, one per
+   `SegmentInfo` filter. Our pipeline pre-links with the static
+   `retro68-flat.ld` which collapses everything into a single `.text`,
+   so even though Elf2Mac runs in `MultiSegmentApp` mode it finds
+   only one populated segment (Main, the `*` catch-all). Reference
+   has 7 mostly-empty CODE resources for unused libstdc++ chunks; we
+   skip them.
+
+2. **No SIZE resource.** Retro68's CMake `add_application` macro
+   compiles a Rez source alongside the C, producing a `SIZE`
+   resource that the Finder reads to decide app memory allocation.
+   We don't run Rez in this pipeline at all — the playground's
+   classic-vibe-mac downstream already has wasm-rez for the .r
+   files, so this gap closes naturally when the two repos meet
+   end-to-end (cv-mac #64).
+
+3. **Data-fork content.** Reference has `data fork = 0` (Retro68
+   strips the placeholder Object.cc's stage 2 string). Our pipeline
+   carries the literal `"Built using Retro68."` from
+   `SingleSegmentApp`'s `file.data = "..."` line. Cosmetic.
+
+### Path to bootable equivalence
+
+The structural pass doesn't prove the binary will run on a real
+68k. To close that:
+
+- **Multi-segment ld script** — port Elf2Mac's
+  `SegmentMap::CreateLdScript` (~140 LOC across `LdScript.cc` +
+  `SegmentMap.cc`) into something the JS host can run, OR add a
+  `--write-ldscript-only <path>` CLI flag to Elf2Mac and rebuild the
+  wasm. The flag is the smaller change; the rebuild costs a docker
+  round-trip.
+- **SIZE resource** — pipe through wasm-rez (already shipping in
+  classic-vibe-mac) with a default `SIZE` template, then splice into
+  the resource fork. This is the natural cross-repo handoff.
+- **Boot test** — wire the in-browser pipeline output through
+  classic-vibe-mac's HFS patcher → BasiliskII, the way the existing
+  prebuilt-demo path does. Same hot-load mechanics as #80's Show
+  Assembly panel; new orchestration on top.
+
+### Updated bytes-of-progress
+
+| Stage  | Status | Artefact | Brotli |
+| --- | --- | --- | --- |
+| Phase 2.0 | ✅ | hello-toolbox-retro68.bin (vendored) | 12 KB |
+| Phase 2.1 | ✅ | cc1.wasm + cc1.mjs | 3.3 MB |
+| Phase 2.2 | ✅ | as.wasm + as.mjs | 270 KB |
+| Phase 2.3a | ✅ | ld.wasm + ld.mjs | 304 KB |
+| Phase 2.3b | ✅ | Elf2Mac.wasm + Elf2Mac.mjs (MinimalElf, RealLD stubbed) | 81 KB |
+| Phase 2.3c | ✅ | convert-mode Elf2Mac.wasm built and proven | (same) |
+| Phase 2.3d | ✅ | end-to-end .bin (single-segment, structurally valid) | (n/a — pipeline test) |
+|  | **Total** | | **~4.0 MB brotli** |
+
+End-to-end C → MacBinary II APPL in the browser, in ~4 MB brotli,
+all four tools chained through MEMFS, structurally valid output.
+Bootable equivalence still requires the multi-segment ld script +
+SIZE resource — both bounded follow-ups.
