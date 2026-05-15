@@ -2318,3 +2318,126 @@ That keeps the libs blob at 7.2 MB raw / 1.1 MB brotli. If a future
 sample needs C++ or RetroConsole, expand the whitelist; if a real
 program references math symbols beyond libm, the link will fail
 loudly and we add the next archive.
+
+---
+
+## Phase 2.3d — `_start` fallback was pre-satisfying libretrocrt's real entry point (2026-05-15)
+
+Caught by the **first eyes-on test** of the in-browser C compile-and-run
+loop on cv-mac's deployed playground (cv-mac #84 and follow-up). Single
+fix that closes "you can write and run C in the browser" — without it,
+every wasm-built binary launches and immediately exits, because `main`
+never runs.
+
+### Symptom
+
+cv-mac user double-clicks `WasmHello` (an in-browser-built `int main()
+{ while(1); return 0; }`). Finder runs the launch animation, app
+"executes," app disappears. No type-3 dialog, no error, no infinite
+spin. Pasted a `SysBeep(30); while(1);` source: same result — no beep,
+clean exit. Replaced the spin with `for (volatile long i = 0; i <
+2e8; i++) ;`: same again, with no measurable wall-clock delay before
+exit. So `main()` is never actually being called.
+
+### Root cause
+
+Extracting CODE 1 from the offending `.bin` and computing the `_start`
+offset from the entry-trampoline's `ADDI.L #imm, (A7)` immediate
+(stored = 6 in the broken build) put `_start` at offset 16, where the
+bytes were a bare **`4e 75`** — m68k RTS. That's the
+**`PROVIDE(_start = .)`** *fallback* from `retro68-flat.ld`:
+
+```
+PROVIDE(_start = .); /* fallback entry point to a safe spot - needed for libretro bootstrap */
+Retro68InitMultisegApp = .;
+SHORT(0x4e75); /* rts */
+```
+
+Comparing against the reference `hello-toolbox-retro68.bin`'s CODE 1 at
+the same offset: `4e 56 ff f8 20 3c …` (`LINK A6, #-8; MOVE.L #imm,
+D0; …`) — libretrocrt's real `_start` function prologue. Reference
+build pulled it; ours didn't.
+
+Why ours doesn't: **GNU ld's archive search is symbol-driven** — it
+pulls a `.o` from a `.a` only when an unresolved symbol references the
+defined symbols inside. `in.o` contains `main` and references nothing
+in libretrocrt, so the archive scan never reaches start.c.obj. The
+script's `PROVIDE(_start = .)` *defines* `_start` (as the fallback
+RTS), the `ENTRY(_start)` directive is satisfied, the link succeeds,
+and the resulting binary has `_start` pointing at a bare RTS.
+
+`-u _start` *should* have forced the search but didn't — PROVIDE
+defines `_start` during script evaluation, which happens before the
+archive search reaches the end of its pass.
+
+### The fix (three things together)
+
+1. **Extract `libretrocrt.a:start.c.obj` as a standalone `.o`** and link
+   it ahead of any archive:
+   ```
+   ld ... -o out.gdb /sysroot/lib/start.c.obj in.o --start-group ...
+   ```
+   start.c.obj's `_start` is a strong symbol; PROVIDE sees `_start`
+   already defined and skips. The trampoline lands on real libretrocrt
+   code that calls `Retro68Relocate`, `Retro68CallConstructors`,
+   `main()`, etc.
+
+2. **`--start-group … --end-group`** around all the archives. Once
+   start.c.obj is pulled, it transitively references atexit / malloc /
+   exit etc., which cross-reference between libretrocrt / libc / libgcc.
+   Without `--start-group`, ld's single-pass scan misses these. With
+   it, the archives are scanned iteratively until no new unresolved
+   symbols remain.
+
+3. **Add `libgcc.a` to the lib bundle.** libretrocrt's `syscalls.c.obj`
+   uses `__udivsi3` / `__mulsi3` (32-bit soft-divide / soft-mul, since
+   m68k has no native 32-bit divide). These live in `libgcc.a`, not in
+   any of the libretrocrt / libInterface / libc / libm archives. The
+   Retro68 ld driver auto-adds `-lgcc`; the bare-bones ld we ship does
+   not. Extracted from
+   `/Retro68-build/toolchain/lib/gcc/m68k-apple-macos/12.2.0/libgcc.a`
+   in the autc04/retro68 docker image (651 KB raw / ~210 KB brotli).
+
+### Bundle changes
+
+- `LIB_KEEP_BASENAMES` gains `libgcc.a`.
+- Bundle packer extracts `start.c.obj` from `libretrocrt.a` and ships
+  it as a standalone entry at `/lib/start.c.obj` inside
+  `sysroot-libs.bin`. Side-effect: also writes it to the source sysroot
+  tree so the spike's `full-pipeline.mjs` (which mounts via NODEFS,
+  not the packed blob) can link against it directly. One canonical
+  source of truth, two delivery paths.
+- `full-pipeline.mjs` and `verify-show-asm-bundle.mjs` updated to use
+  the new link order + `--start-group` + libgcc.
+
+### Result
+
+`while(1);` source now produces:
+
+```
+data fork  =  20 bytes
+rsrc fork  =  9194 bytes (was 542)
+CODE×2     (jump table + real Main with libretrocrt's _start)
+DATA×1, RELA×2
+below_a5   =  1400  (vs reference 1428; was 76)
+```
+
+Within 2% of the reference's structural fingerprint. Test on deployed
+Pages confirms the bin boots — the `while(1);` source hangs BasiliskII
+exactly as expected (main runs, doesn't return). The pipeline now
+produces actually-running classic Mac apps.
+
+### General rule
+
+When linking via `ld` directly (not through a compiler driver), be
+explicit about three things that drivers do for you:
+
+1. **Order matters.** Object files providing required symbols (like
+   `_start`) must appear *before* any script-side `PROVIDE` of those
+   symbols, otherwise the fallback wins.
+2. **`--start-group` for archive cross-references.** Single-pass scan
+   silently drops cross-archive symbols. The cost is a slightly slower
+   link; the benefit is correctness.
+3. **`libgcc.a` is not optional** for C programs on m68k. The compiler
+   emits calls to soft-fp/-divide helpers that the rest of the C
+   runtime doesn't provide.

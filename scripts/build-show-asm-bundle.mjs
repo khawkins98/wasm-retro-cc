@@ -113,9 +113,36 @@ const LIB_KEEP_BASENAMES = new Set([
   "libInterface.a",
   "libc.a",
   "libm.a",
+  // libgcc.a — softfloat / softdiv helpers (`__udivsi3`, `__mulsi3`, …)
+  // referenced transitively from libretrocrt's syscalls.c.obj and from
+  // any C source that does 32-bit multiplication or division on m68k.
+  // Without this, ld can't resolve those symbols and the link fails.
+  // Extracted from `/Retro68-build/toolchain/lib/gcc/m68k-apple-macos/12.2.0/libgcc.a`
+  // in the Retro68 docker image.
+  "libgcc.a",
 ]);
 const LIB_SUBTREE = "lib";
 const LD_SUBTREE = "ld";
+
+// libretrocrt.a:start.c.obj is the Mac _start function — it sets up the
+// A5 world, runs Retro68's relocations and constructors, then calls
+// `main`. We need it linked at the very start of the input list so the
+// ld script's `PROVIDE(_start = .)` *fallback* (a single `RTS`) doesn't
+// pre-satisfy `_start` before the archive scan reaches start.c.obj.
+//
+// GNU ld's archive search is symbol-driven: it pulls a `.o` from a `.a`
+// only when an unresolved symbol references it. Once `PROVIDE` defines
+// `_start`, the archive scan stops searching for `_start` — the
+// non-libretrocrt fallback wins, the entry trampoline jumps to a
+// single `RTS`, and the app exits immediately after launch with no
+// `main()` ever running. We caught this end-to-end on the deployed
+// cv-mac playground; see LEARNINGS "Phase 2.3d — _start fallback was
+// pre-satisfying libretrocrt's real entry point".
+//
+// The fix: ship `start.c.obj` as a standalone `.o` in the bundle so the
+// consumer can pass it directly to `ld` before any `.a` archive, which
+// satisfies `_start` ahead of the script's PROVIDE.
+const START_OBJ_BASENAME = "start.c.obj";
 
 function ensureExists(p) {
   if (!statSync(p, { throwIfNoEntry: false })) {
@@ -137,6 +164,48 @@ function walk(dir, into) {
     }
     // Skip symlinks defensively — sysroot has none today.
   }
+}
+
+/** Pull a single object member out of a GNU ar archive. Returns the
+ *  raw .o bytes. Used to ship `libretrocrt.a:start.c.obj` as a
+ *  standalone input file in the bundle — see START_OBJ_BASENAME's
+ *  doc comment for the rationale.
+ *
+ *  GNU `ar` archive layout: 8-byte magic `!<arch>\n`, then a sequence
+ *  of 60-byte headers each followed by data and an optional padding
+ *  byte. Extended-length filenames are stored as `/<offset>` references
+ *  into the special `//` member's data. We handle exactly enough format
+ *  to find the named .obj — full ar parsers do much more (symbol index,
+ *  thin archives, BSD-style names) that this code intentionally skips. */
+function extractArchiveMember(archivePath, memberName) {
+  const data = readFileSync(archivePath);
+  const magic = data.slice(0, 8).toString("ascii");
+  if (magic !== "!<arch>\n") {
+    throw new Error(`${archivePath}: not a GNU ar archive (magic '${magic}')`);
+  }
+  let cursor = 8;
+  let extTable = null;
+  while (cursor + 60 <= data.length) {
+    const header = data.slice(cursor, cursor + 60);
+    let name = header.slice(0, 16).toString("ascii").trimEnd();
+    const size = parseInt(header.slice(48, 58).toString("ascii").trim(), 10);
+    const memberData = data.slice(cursor + 60, cursor + 60 + size);
+    cursor += 60 + size + (size % 2); // pad to even byte
+    if (name === "//") {
+      extTable = memberData;
+      continue;
+    }
+    if (name === "/" || name === "") continue; // symbol index
+    if (name.startsWith("/") && extTable) {
+      const idx = parseInt(name.slice(1), 10);
+      const end = extTable.indexOf("/\n", idx);
+      name = extTable.slice(idx, end).toString("ascii");
+    } else if (name.endsWith("/")) {
+      name = name.slice(0, -1);
+    }
+    if (name === memberName) return Buffer.from(memberData);
+  }
+  throw new Error(`${archivePath}: member '${memberName}' not found`);
 }
 
 for (const [srcDir, mjs, wasm] of TOOLS) {
@@ -240,6 +309,10 @@ const headers = packBlob("sysroot.bin", "sysroot.index.json", {
 //   /lib/<basename>           — only LIB_KEEP_BASENAMES (top-level files
 //                                under lib/, no subdirs — lib/ldscripts/
 //                                is intentionally NOT in the keep set).
+//   /lib/start.c.obj          — extracted from libretrocrt.a and shipped
+//                                as a standalone .o so the consumer can
+//                                link it ahead of any .a archive (see
+//                                the comment on START_OBJ_BASENAME above).
 //   /ld/retro68-flat.ld       — single ld script.
 const libs = packBlob("sysroot-libs.bin", "sysroot-libs.index.json", {
   subtrees: [LIB_SUBTREE, LD_SUBTREE],
@@ -255,6 +328,52 @@ const libs = packBlob("sysroot-libs.bin", "sysroot-libs.index.json", {
     return false;
   },
 });
+
+// 2c. Extract `start.c.obj` from `libretrocrt.a` and append it to the
+//     libs blob as a standalone entry at `lib/start.c.obj`. We append
+//     rather than re-pack to keep the implementation small; the JSON
+//     index gains one entry and the .bin grows by ~1.2 KB.
+//
+// Side-effect: ALSO write the extracted .obj to the source sysroot
+// tree under `lib/start.c.obj`. That way the spike's `full-pipeline.mjs`
+// (which mounts the source sysroot via NODEFS rather than reading the
+// packed blob) can link against it directly. The packed-blob consumers
+// (cv-mac) read from the blob entry; the in-tree spike consumer reads
+// from disk. One canonical source of truth, two delivery paths.
+const startObjBytes = extractArchiveMember(
+  resolve(SYSROOT_SRC, LIB_SUBTREE, "libretrocrt.a"),
+  START_OBJ_BASENAME,
+);
+writeFileSync(
+  resolve(SYSROOT_SRC, LIB_SUBTREE, START_OBJ_BASENAME),
+  startObjBytes,
+);
+console.log(
+  `[bundle] wrote ${LIB_SUBTREE}/${START_OBJ_BASENAME} to source sysroot for spike use`,
+);
+{
+  // Re-read the libs blob, append start.c.obj, re-write blob + index.
+  const libsBin = readFileSync(join(OUT_DIR, "sysroot-libs.bin"));
+  const libsIndex = JSON.parse(
+    readFileSync(join(OUT_DIR, "sysroot-libs.index.json"), "utf8"),
+  );
+  libsIndex.push({
+    p: `${LIB_SUBTREE}/${START_OBJ_BASENAME}`,
+    o: libsBin.length,
+    l: startObjBytes.length,
+  });
+  const newLibs = Buffer.concat([libsBin, startObjBytes]);
+  writeFileSync(join(OUT_DIR, "sysroot-libs.bin"), newLibs);
+  writeFileSync(
+    join(OUT_DIR, "sysroot-libs.index.json"),
+    JSON.stringify(libsIndex),
+  );
+  libs.blob = new Uint8Array(newLibs);
+  libs.indexEntries = libsIndex;
+  console.log(
+    `[bundle] sysroot-libs.bin           +${startObjBytes.length} B for ${LIB_SUBTREE}/${START_OBJ_BASENAME}`,
+  );
+}
 
 // 3. README.
 let totalRaw = 0;

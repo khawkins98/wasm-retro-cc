@@ -125,16 +125,38 @@ console.log(`[pipeline] /tmp/out.o: ${oBytes.length} bytes`);
 // ── 3. ld.wasm: .o + libs + ldscript → ELF executable ───────────
 const ld = await loadTool(LD_MJS, "ld");
 ld.Module.FS.writeFile("/tmp/in.o", oBytes);
+// Link order matters (cv-mac eyes-on test 2026-05-15, see LEARNINGS
+// "Phase 2.3d — _start fallback was pre-satisfying libretrocrt's
+// real entry point"):
+//
+//   1. `start.c.obj` *first*, before any .a — it defines `_start` and
+//      satisfies the ld script's ENTRY before the script's
+//      `PROVIDE(_start = .)` fallback (a bare RTS) can preempt it.
+//      Without this, archive search never pulls libretrocrt's real
+//      start.c, the trampoline jumps to the RTS fallback, and `main`
+//      never runs.
+//
+//   2. All archives wrapped in `--start-group … --end-group` so
+//      cross-archive references (libretrocrt → libc → libretrocrt,
+//      libretrocrt → libgcc, etc.) resolve regardless of order.
+//
+//   3. `libgcc.a` included — softfloat / softdiv helpers
+//      (`__udivsi3`, `__mulsi3`, …) that libretrocrt's syscalls.c
+//      transitively needs.
 rc = runMain(ld, [
   "-T", "/sysroot/ld/retro68-flat.ld",
   "-L", "/sysroot/lib",
   "--no-warn-rwx-segments",
   "-o", "/tmp/out.gdb",
+  "/sysroot/lib/start.c.obj",
   "/tmp/in.o",
-  // Standard Retro68 link order — same as `add_application` produces.
+  "--start-group",
   "/sysroot/lib/libretrocrt.a",
   "/sysroot/lib/libInterface.a",
   "/sysroot/lib/libc.a",
+  "/sysroot/lib/libm.a",
+  "/sysroot/lib/libgcc.a",
+  "--end-group",
 ]);
 if (rc !== 0) { console.error("[pipeline] ld failed"); process.exit(rc); }
 const elfBytes = ld.Module.FS.readFile("/tmp/out.gdb");
