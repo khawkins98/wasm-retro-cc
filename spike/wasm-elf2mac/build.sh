@@ -40,6 +40,62 @@ check_image() {
 # subdirectories of a synthesized parent project. The Retro68 build
 # normally orchestrates this through its top-level CMakeLists.txt; we
 # extract just the bits we need.
+# Make a writable copy of /Retro68/Elf2Mac and patch RealLD to a
+# no-op so the wasm build can run convert-only (skip fork+exec ld).
+# In the wasm pipeline, JS glue orchestrates ld externally and passes
+# the resulting ELF path to Elf2Mac. RealLD's fork() in the original
+# source is what made Elf2Mac.wasm exit -1 on Module instantiation.
+prepare_elf2mac() {
+  local target_dir="$1"
+  run_in_container "
+    set -e
+    rm -rf $target_dir
+    cp -r /Retro68/Elf2Mac $target_dir
+    cd $target_dir
+
+    # Stub out RealLD's body — the fork+exec is the offending block.
+    # Python with proper brace-counting since simple regex can't
+    # match a balanced {...}.
+    python3 << 'PYEOF'
+src = open('Elf2Mac.cc').read()
+# Find the start of RealLD's body
+sig = 'void RealLD(vector<string> args)'
+start = src.find(sig)
+if start < 0:
+    raise SystemExit('RealLD signature not found')
+# Find the opening brace after the signature
+brace_open = src.find('{', start)
+# Match braces to find the body end
+depth = 0
+i = brace_open
+while i < len(src):
+    if src[i] == '{':
+        depth += 1
+    elif src[i] == '}':
+        depth -= 1
+        if depth == 0:
+            brace_close = i
+            break
+    i += 1
+patched_body = (
+    sig + '\\n'
+    '{\\n'
+    '    /* Phase 2.3c patch: convert-only mode. The JS host\\n'
+    '     * orchestrates wasm ld externally; this function is a\\n'
+    '     * no-op. The ELF file Elf2Mac expects to read next\\n'
+    '     * (outputFile + .gdb) must be present in MEMFS before\\n'
+    '     * main() is invoked. */\\n'
+    '    (void)args;\\n'
+    '}'
+)
+out = src[:start] + patched_body + src[brace_close+1:]
+open('Elf2Mac.cc', 'w').write(out)
+PYEOF
+    echo 'patched Elf2Mac.cc OK'
+    grep -A1 'void RealLD' Elf2Mac.cc | head -3
+  "
+}
+
 # Make a writable copy of /Retro68/ResourceFiles and apply our patch
 # (boost::filesystem → std::filesystem). The Retro68 image is read-only
 # inside the container; we materialise the patched source under the
@@ -125,8 +181,9 @@ set(HFS_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/hfs-shim CACHE PATH "stub — se
 # need a compiled Boost.Filesystem).
 add_subdirectory(/spike/build/RESOURCEFILES_DIR ${CMAKE_CURRENT_BINARY_DIR}/ResourceFiles)
 
-# Elf2Mac
-add_subdirectory(/Retro68/Elf2Mac ${CMAKE_CURRENT_BINARY_DIR}/Elf2Mac)
+# Elf2Mac (patched copy at /spike/build/Elf2Mac-src — RealLD stubbed
+# to no-op so the wasm build doesn't fork+exec ld on Module init).
+add_subdirectory(/spike/build/ELF2MAC_DIR ${CMAKE_CURRENT_BINARY_DIR}/Elf2Mac)
 CMAKE
 }
 
@@ -158,8 +215,12 @@ cmd_stage1() {
   check_image
   mkdir -p "${STAGE1_DIR}"
   prepare_resourcefiles /spike/build/ResourceFiles-stage1
+  prepare_elf2mac /spike/build/Elf2Mac-stage1
   write_cmakelists "${STAGE1_DIR}/CMakeLists.txt"
-  sed -i.bak 's|RESOURCEFILES_DIR|ResourceFiles-stage1|g' "${STAGE1_DIR}/CMakeLists.txt"
+  sed -i.bak \
+    -e 's|RESOURCEFILES_DIR|ResourceFiles-stage1|g' \
+    -e 's|ELF2MAC_DIR|Elf2Mac-stage1|g' \
+    "${STAGE1_DIR}/CMakeLists.txt"
 
   echo "[stage1] configuring native cmake (host build)"
   run_in_container "
@@ -189,8 +250,12 @@ cmd_stage2() {
     cp -r /usr/include/boost/. /spike/build/boost-headers/boost/
   "
   prepare_resourcefiles /spike/build/ResourceFiles-stage2
+  prepare_elf2mac /spike/build/Elf2Mac-stage2
   write_cmakelists "${STAGE2_DIR}/CMakeLists.txt"
-  sed -i.bak 's|RESOURCEFILES_DIR|ResourceFiles-stage2|g' "${STAGE2_DIR}/CMakeLists.txt"
+  sed -i.bak \
+    -e 's|RESOURCEFILES_DIR|ResourceFiles-stage2|g' \
+    -e 's|ELF2MAC_DIR|Elf2Mac-stage2|g' \
+    "${STAGE2_DIR}/CMakeLists.txt"
 
   echo "[stage2] configuring wasm cross via emcmake"
   run_in_container "
