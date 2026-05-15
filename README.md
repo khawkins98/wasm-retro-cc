@@ -81,14 +81,39 @@ Full retrospective in [`spike-pcc/ARCHIVE.md`](./spike-pcc/ARCHIVE.md).
 
 ## What this is
 
-The goal is a self-contained WASM module — `retro-cc.wasm` +
-`retro-cc.js` — that compiles C source code targeting
-`m68k-apple-macos` entirely in a browser tab, returning a valid
-MacBinary II that a BasiliskII WASM emulator can hot-load. No backend,
-no GitHub Actions detour, no local toolchain install.
+A WebAssembly build of Retro68's classic-Mac 68k C toolchain — `cc1`,
+GNU `as`, GNU `ld`, and `Elf2Mac` — packaged so a JavaScript host
+can compile C source code targeting `m68k-apple-macos` entirely in a
+browser tab, returning a valid MacBinary II APPL. No backend, no
+GitHub Actions detour, no local toolchain install.
 
-JS API parity with [`wasm-rez`](https://github.com/khawkins98/wasm-rez)
-so the downstream integration in classic-vibe-mac is minimally invasive.
+## Two-repo project
+
+This repo is **toolchain-only**. The interactive playground that
+consumes it — editor, in-browser emulator, demo apps, hot-load flow —
+lives in **[`classic-vibe-mac`](https://github.com/khawkins98/classic-vibe-mac)**.
+
+If you found this repo *via* `classic-vibe-mac`, the toolchain you
+care about is the four `.wasm`/`.mjs` files under `dist/show-asm/`
+plus the bundle script that packages them with the Retro68 sysroot.
+
+If you found this repo on its own, **it's reusable.** Nothing here
+is `classic-vibe-mac`-specific — the JS API takes source files and
+returns a MacBinary, and the consumer decides what to do with it.
+Plausible other uses:
+
+- A retro-Mac-C tutorial site that compiles user code in-browser as
+  a teaching tool.
+- A static-site IDE for hobbyist classic Mac apps with no server.
+- A retro-Mac-code-golf scoreboard that builds + runs submissions
+  client-side.
+- A Mac-in-the-browser project that wants to ship "edit and rebuild"
+  for its own bundled apps.
+
+We use it for `classic-vibe-mac`, but if you find another use, the
+public surface area is just the four wasm modules + the sysroot
+bundle. PRs welcome if your use case surfaces something that needs
+abstracting.
 
 ---
 
