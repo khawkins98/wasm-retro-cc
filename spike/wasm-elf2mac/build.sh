@@ -93,14 +93,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Boost REQUIRED)
 include_directories(${Boost_INCLUDE_DIR})
 
-# ELF: Retro68's "ELF" target is referenced by Elf2Mac. It uses
-# libelf's gelf API (gelf_getshdr, elf_getdata, elf_strptr, ...) for
-# parsing m68k ELF object files. libelf-dev is installed in the
-# image; wire the target as an INTERFACE that links it.
-find_library(ELF_LIB NAMES elf)
+# ELF: Retro68's "ELF" target is what Elf2Mac links against for libelf.
+# Phase 2.3b decision (option b in LEARNINGS): we replace libelf with a
+# hand-rolled 200-LOC MinimalElf that implements just the 10 libelf
+# functions Elf2Mac uses (elf_begin, elf_getshdr, gelf_getsym, etc).
+# Same target name "ELF" so /Retro68/Elf2Mac/CMakeLists.txt
+# (target_link_libraries(Elf2Mac ResourceFiles ELF)) keeps working
+# unchanged.
+add_subdirectory(/spike/minimal-elf ${CMAKE_CURRENT_BINARY_DIR}/MinimalElf)
 add_library(ELF INTERFACE)
-target_compile_definitions(ELF INTERFACE _GNU_SOURCE=1)
-target_link_libraries(ELF INTERFACE ${ELF_LIB})
+target_link_libraries(ELF INTERFACE MinimalElf)
 
 # HFS: ResourceFile.cc uses libhfs in ONE method (writes .dsk volume).
 # Elf2Mac never calls that method. We provide a shim hfs-stub.h +
@@ -202,7 +204,7 @@ cmd_stage2() {
       # FindBoost is satisfied.
       emcmake cmake . \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_CXX_FLAGS=\"-Os -g0\" \
+        -DCMAKE_CXX_FLAGS=\"-Os -g0 -fwasm-exceptions\" \
         -DBoost_INCLUDE_DIR=/spike/build/boost-headers \
         -DBoost_NO_BOOST_CMAKE=ON \
         2>&1 | tee configure.log | tail -50
@@ -223,16 +225,22 @@ cmd_relink() {
     set -euo pipefail
     cd /spike/build/stage2
 
-    LDFLAGS_WASM='-sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=1GB -sINITIAL_MEMORY=64MB -sSUPPORT_LONGJMP=wasm -sLLD_REPORT_UNDEFINED=1 -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORTED_FUNCTIONS=_main,_malloc,_free -sEXPORTED_RUNTIME_METHODS=FS,ERRNO_CODES,NODEFS,allocateUTF8,callMain -lnodefs.js -sEXPORT_NAME=createElf2Mac'
+    # -fwasm-exceptions because Boost.algorithm (header-only) throws
+    # C++ exceptions. Must match the compile-side flag in stage 2
+    # CXXFLAGS — exception model is sticky across .o + link.
+    LDFLAGS_WASM='-fwasm-exceptions -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=1GB -sINITIAL_MEMORY=64MB -sSUPPORT_LONGJMP=wasm -sLLD_REPORT_UNDEFINED=1 -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORTED_FUNCTIONS=_main,_malloc,_free -sEXPORTED_RUNTIME_METHODS=FS,ERRNO_CODES,NODEFS,allocateUTF8,callMain -lnodefs.js -sEXPORT_NAME=createElf2Mac'
 
     cd Elf2Mac 2>/dev/null || cd .
-    rm -f Elf2Mac Elf2Mac.wasm
-    LINK_LINE=\$(emmake make V=1 Elf2Mac 2>&1 | grep -E '^/opt/emsdk/upstream/emscripten/em\\+\\+' | tail -1)
+    rm -f Elf2Mac Elf2Mac.js Elf2Mac.wasm
+    # CMake uses VERBOSE=1 (not V=1) for verbose output. Emcc's
+    # cmake-driven link emits to Elf2Mac.js (not Elf2Mac) — sed on
+    # that to get .mjs.
+    LINK_LINE=\$(VERBOSE=1 emmake make Elf2Mac 2>&1 | grep -E 'em\\+\\+|emcc' | tail -1)
     if [ -z \"\$LINK_LINE\" ]; then
-      echo 'Could not capture link line from V=1 build'
+      echo 'Could not capture link line'
       exit 1
     fi
-    PATCHED=\$(echo \"\$LINK_LINE\" | sed -e 's|-o Elf2Mac |-o Elf2Mac.mjs |g')
+    PATCHED=\$(echo \"\$LINK_LINE\" | sed -e 's|-o Elf2Mac.js |-o Elf2Mac.mjs |g')
     echo '[relink] re-linking with wasm flags'
     eval \"\$PATCHED \$LDFLAGS_WASM\" 2>&1 | tail -10
   "

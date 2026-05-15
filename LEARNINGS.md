@@ -2002,6 +2002,79 @@ hand-rolled ELF read is more bounded than libelf's transitive deps.
 Document `MinimalElf.cc` against the closed set of 12 libelf calls
 Elf2Mac actually uses (grep `Elf2Mac/*.cc` for `elf_` / `gelf_`).
 
+**Update (later same session, 2026-05-15): (b) WORKED.**
+`MinimalElf.cc` is 240 LOC of pure C++. Drop-in replacement for
+libelf — same opaque types (`Elf`, `Elf_Scn`, `Elf_Data`), same
+function signatures (`elf_begin`, `gelf_getshdr`, ...). Reads ELF
+once at `elf_begin`, byte-swaps Elf32 fields from big-endian source
+to host-endian on each `gelf_*` read. Linked into Elf2Mac instead of
+libelf via a CMake `add_library(ELF INTERFACE)` that depends on the
+`MinimalElf` static lib. Compatibility shims `gelf.h` and `libelf.h`
+in `minimal-elf/` point at `MinimalElf.h` so existing `#include
+<gelf.h>` in Elf2Mac's source compiles unmodified.
+
+The 10 libelf calls Elf2Mac uses (audit via grep over the source):
+`elf_begin`, `elf_errmsg`, `elf_end`, `elf_version`, `elf_nextscn`,
+`elf_getshdr` → `gelf_getshdr`, `elf_strptr`, `elf_getshdrstrndx`,
+`elf_getdata`, `gelf_getehdr`, `gelf_getsym`, `gelf_getrela`. Plus
+the `GELF_R_SYM` / `GELF_R_TYPE` / `GELF_ST_BIND` / `GELF_ST_TYPE`
+macros — implemented as forwarders to the standard `ELF64_R_*`
+macros from `<elf.h>`. gelf_getrela re-encodes Elf32's 32-bit
+`r_info` field as `(sym << 32) | type` to match Elf64 layout (which
+the macros expect).
+
+### Elf2Mac.wasm built, end-to-end use needs one more piece
+
+Final sizes after this session:
+
+| Artefact | Raw | Brotli |
+| --- | --- | --- |
+| `Elf2Mac.wasm` | 280 KB | **81 KB** |
+| `Elf2Mac.mjs` | 80 KB | — |
+
+Combined Phase 2 toolchain in brotli:
+- cc1: 3.3 MB
+- as:  270 KB
+- ld:  304 KB
+- Elf2Mac: 81 KB
+- **Total: ~4.0 MB brotli** for the whole C → MacBinary II in-browser pipeline.
+
+Build-time landmines for the wasm port (after MinimalElf solved the
+libelf problem):
+
+1. **Boost.algorithm uses C++ exceptions.** Compile-and-link with
+   `-fwasm-exceptions` (NOT `-fexceptions`). Mixing exception models
+   between compile and link causes `__cxa_uncaught_exceptions:
+   undefined symbol` at the link step. Use `-fwasm-exceptions`
+   consistently in `CMAKE_CXX_FLAGS` and in the relink LDFLAGS.
+2. **CMake's emcc output is `Elf2Mac.js` (not `Elf2Mac`).** Relink's
+   sed substitution needs `-o Elf2Mac.js |` → `-o Elf2Mac.mjs |`,
+   not `-o Elf2Mac |` → `-o Elf2Mac.mjs |`.
+3. **CMake uses `VERBOSE=1`, not `V=1`** for verbose make output.
+   Autoconf-built projects (cc1, binutils) use `V=1`; CMake-built
+   projects (Elf2Mac) use `VERBOSE=1`. The relink step's
+   command-capture regex needs to be aware of both styles.
+
+### Path forward — Phase 2.3c
+
+Elf2Mac.mjs LOADS in Node but `main()` aborts immediately because
+the very first thing it does is call `fork()` to spawn an `ld`
+subprocess (Elf2Mac orchestrates the link, then converts the
+resulting ELF to MacBinary). For our wasm pipeline we want the
+*converter* part only — the wasm `ld` is a separate step that JS
+glue code orchestrates externally.
+
+**Phase 2.3c — convert-mode Elf2Mac.** Patch `Elf2Mac.cc:RealLD` to
+no-op (or expose a new CLI flag like `--no-ld` that skips the fork).
+Take an existing ELF as input, emit MacBinary directly. End-to-end
+test: pipe `hello_toolbox.o` (Phase 2.2 output) through wasm `ld`
+(plain ELF executable) then through patched-`Elf2Mac.wasm` →
+MacBinary II → `inspect_macbinary.py` PASS → diff against Phase 2.0
+reference `hello-toolbox-retro68.bin`.
+
+Estimated effort: small (a few-line patch to Elf2Mac.cc). No new
+build-system landmines expected.
+
 ### Phase 2.3 — landmines documented before next attempt
 
 Things we've learned the hard way and should not repeat:
