@@ -1,0 +1,9 @@
+# Build outputs (re-derivable via build.sh).
+build/
+
+# Vendored Retro68 SDK headers (re-derivable from the pinned Retro68
+# Docker image via the sysroot extraction step in build.sh; see
+# LEARNINGS.md "Phase 2.1 — end-to-end" for the procedure). Don't
+# commit: 15 MB of binary-ish .h files with mixed Apple/MPW upstream
+# licenses; vendor on demand instead.
+sysroot/

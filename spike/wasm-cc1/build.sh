@@ -341,7 +341,8 @@ cmd_relink() {
       -sEXPORT_ES6=1 \\
       -sEXPORT_NAME=createCC1 \\
       -sEXPORTED_FUNCTIONS=_main,_malloc,_free \\
-      -sEXPORTED_RUNTIME_METHODS=FS,ERRNO_CODES,allocateUTF8,callMain \\
+      -sEXPORTED_RUNTIME_METHODS=FS,ERRNO_CODES,NODEFS,allocateUTF8,callMain \\
+      -lnodefs.js \\
       -o cc1.mjs \\
       c/c-lang.o c-family/stub-objc.o attribs.o c/c-errors.o c/c-decl.o \\
       c/c-typeck.o c/c-convert.o c/c-aux-info.o c/c-objc-common.o \\

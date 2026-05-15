@@ -1731,3 +1731,111 @@ sub-spikes are:
   Phase 2.0 derisk source via the wasm cc1 and diff against the
   native build. If equivalent, Phase 2.1 (the *whole* sub-spike, not
   just the load test) is done.
+
+
+---
+
+## Phase 2.1 — end-to-end: byte-identical compilation of hello_toolbox.c (2026-05-15, done)
+
+**Status: full Phase 2.1 sub-spike complete.** The wasm cc1 compiles
+`spike/hello_toolbox.c` (the same C source the Phase 2.0 binary
+booted from) via the Retro68 SDK sysroot mounted into MEMFS, and the
+output is **byte-for-byte identical** to what the native
+`m68k-apple-macos-cc1` produces for the same input.
+
+```
+diff hello_toolbox_native.s hello_toolbox_wasm.s
+(exit 0 — no differences)
+```
+
+Same 694 bytes of m68k assembly. Same A-trap opcodes. Same MacsBug
+symbol. Same `qd+202` offset for `&qd.thePort` (confirming Retro68's
+mac68k struct packing). Same everything.
+
+### What the harness does
+
+`spike/wasm-cc1/test/compile-hello-toolbox.mjs`:
+
+1. Loads `cc1.mjs` (the ES module from relink).
+2. Mounts the host sysroot at `/sysroot/` inside cc1's MEMFS via
+   Emscripten's **NODEFS** (linked in via `-lnodefs.js` + exported
+   via `EXPORTED_RUNTIME_METHODS=NODEFS`).
+3. Writes `hello_toolbox.c` to `/tmp/` in MEMFS.
+4. Invokes `cc1` with `-isystem /sysroot/gcc-include -isystem /sysroot/include -mcpu=68020`.
+5. Reads `/tmp/hello_toolbox.s` back out.
+6. Sanity-checks the A-trap opcodes and Pascal string content.
+
+### Sysroot construction
+
+Combined two sources:
+
+1. **Retro68's CIncludes + Universal Headers** — 109 files / 15 MB.
+   Pulled from the pre-built `ghcr.io/autc04/retro68@sha256:e8b6cc8…`
+   image's `/Retro68-build/toolchain/m68k-apple-macos/include/`. Use
+   `cp -L` to resolve symlinks; many of the headers are symlinks into
+   `multiverse/CIncludes/`.
+2. **GCC's builtin headers** — `stddef.h`, `stdbool.h`, etc., from
+   our own stage 1 build's `gcc/include/`. Without these, Retro68's
+   `Multiverse.h` fails to find `<stdbool.h>`.
+
+Sysroot lives at `spike/wasm-cc1/build/sysroot/`:
+
+```
+sysroot/
+├── gcc-include/         # GCC builtins (stdbool, stddef, ...)
+└── include/             # Retro68 CIncludes (Quickdraw, Windows, ...)
+```
+
+cc1 needs **both** `-isystem` paths. Order matters less than
+having both present.
+
+### A-trap inlining proof
+
+The Retro68 SDK headers declare Toolbox calls with `= { 0xAxxx }`
+GCC extension. That's NOT an extern function — GCC inlines the trap
+opcode directly at the call site. So in our wasm cc1's output for
+`InitGraf(&qd.thePort)`:
+
+```asm
+pea qd+202        ; push &qd.thePort
+.short 0xa86e     ; the InitGraf A-trap word, emitted as inline
+                  ; 16-bit data — that IS the function call
+```
+
+No `InitGraf` symbol in the output. No call to an extern. This is
+fundamentally why the Phase 1 PCC pipeline needed a hand-written
+stub layer (`libtoolbox-stubs.a`) — PCC can't parse `= { 0xAxxx }`.
+Phase 2's GCC pipeline doesn't need stubs because it parses and
+inlines the syntax natively.
+
+### NODEFS wiring lessons
+
+- `Module.NODEFS` is undefined unless added to
+  `EXPORTED_RUNTIME_METHODS` at link time AND `-lnodefs.js` is in
+  the link line. Both are needed; first attempt with only the export
+  threw "Cannot read properties of undefined (reading 'mount')".
+- NODEFS is a Node-only convenience. For the browser deployment of
+  cc1 we'll need a different strategy: either Emscripten's
+  `--preload-file` at link time (bakes the sysroot into the .wasm
+  asset bundle, ~3 MB extra brotli) or a fetched tarball unpacked at
+  runtime via a tar parser in JS. Both deferred to packaging
+  (Phase 2.5).
+- Use the same wiring pattern for any Phase 2.x test that needs the
+  sysroot — define `mountSysroot(Module, hostPath)` once, reuse.
+
+### What this sub-spike rules out for the rest of Phase 2
+
+The wasm cc1 is a faithful port of the native one — same backend,
+same option handling, same emission. There is no remaining "but
+will it behave differently from native?" risk for cc1. Phase 2.2
+(`as`) and 2.3 (`ld`+Elf2Mac) are the same shape — Canadian cross
+to wasm32-emscripten — and the lessons (`CONFIG_SITE`, `-Os -g0` to
+dodge finalize OOM, manual relink for wasm flags, etc.) all transfer.
+
+### Files
+
+- `spike/wasm-cc1/test/memfs-pipe.mjs` — trivial pipe-through harness
+- `spike/wasm-cc1/test/compile-hello-toolbox.mjs` — end-to-end harness
+- `spike/wasm-cc1/build/sysroot/` — vendored Retro68 SDK + GCC builtins
+- `spike/wasm-cc1/build/test/hello_toolbox_wasm.s` — wasm cc1 output
+- `spike/wasm-cc1/build/test/hello_toolbox_native.s` — native cc1 output
