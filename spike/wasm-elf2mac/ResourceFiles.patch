@@ -1,0 +1,49 @@
+--- a/ResourceFile.cc
++++ b/ResourceFile.cc
+@@ -1,15 +1,16 @@
+ #include "ResourceFile.h"
+ #include "BinaryIO.h"
+
+-#include <boost/filesystem.hpp>
+-#include "boost/filesystem/fstream.hpp"
++#include <filesystem>
++#include <fstream>
+ #include <chrono>
+ #include <ctime>
+ #include <sstream>
+ #include <iostream>
++#include <cstring>
+
+ #ifdef __APPLE__
+ #include <sys/xattr.h>
+ #endif
+ extern "C" {
+ #include "hfs.h"
+ }
+
+-namespace fs = boost::filesystem;
++namespace fs = std::filesystem;
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -15,9 +15,10 @@
+ #   You should have received a copy of the GNU General Public License
+ #   along with Retro68.  If not, see <http://www.gnu.org/licenses/>.
+
+-find_package(Boost COMPONENTS filesystem system REQUIRED)
++# Phase 2.3 patch (wasm-elf2mac): boost::filesystem replaced with
++# std::filesystem in ResourceFile.cc; only header-only Boost needed.
++find_package(Boost REQUIRED)
+
+ add_library(ResourceFiles
+     ResourceFork.h ResourceFork.cc
+     BinaryIO.h BinaryIO.cc
+@@ -27,7 +28,7 @@
+
+ find_path(HFS_INCLUDE_DIR NAMES hfs.h)
+ find_library(HFS_LIBRARY NAMES hfs)
+
+-target_link_libraries(ResourceFiles ${Boost_LIBRARIES} ${HFS_LIBRARY})
++target_link_libraries(ResourceFiles ${HFS_LIBRARY})
+ target_include_directories(ResourceFiles PUBLIC .
+                                          PRIVATE ${HFS_INCLUDE_DIR}
+                                                  ${Boost_INCLUDE_DIR})
