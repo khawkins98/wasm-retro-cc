@@ -29,6 +29,8 @@ SECTIONS
         */libretrocrt.a:MultiSegApp.c.obj(.text.*)
         */libretrocrt.a:LoadSeg.s.obj(.text)
         */libretrocrt.a:LoadSeg.s.obj(.text.*)
+        *(.text._start)
+        *(.text._start.*)
         */libretrocrt.a:*(.text)
         */libretrocrt.a:*(.text.*)
         */libInterface.a:*(.text)

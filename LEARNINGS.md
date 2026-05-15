@@ -2631,3 +2631,97 @@ The harness's value showed immediately: 30 seconds of `m68k-run`
 output replaced a 30-minute deploy-and-test cycle that would have
 shown the same symptom (silent exit) without explaining where execution
 actually went. Building it once paid for itself on the first run.
+
+## Follow-up: `_start` placed in `.code00002` instead of `.code00001` — file-form vs archive-form filters (2026-05-15 PM)
+
+After fixing the PROVIDE issue (above), the binary still failed at
+launch with a CHK error in BasiliskII's bomb dialog. The Musashi
+harness once again earned its keep: dumped the linker map and showed
+`.text._start 0x00002554 0x4c /sysroot/lib/start.c.obj` placed under
+`.code00002`, not `.code00001`. The entry trampoline's relative
+`BSR+ADDI+RTS` assumes its target is in the same segment — when the
+target is in `.code00002`, the trampoline jumps to a CODE 2 address as
+if it were in CODE 1, hits unmapped memory, and dies.
+
+### Root cause
+
+The multi-seg script's `.code00001` filter for the entry code uses
+**archive-form** selectors:
+
+```
+*/libretrocrt.a:start.c.obj(.text)
+*/libretrocrt.a:start.c.obj(.text.*)
+```
+
+These match `start.c.obj` *only when ld sees it as a member of
+`libretrocrt.a`*. But our pipeline (and cv-mac's) extracts a
+standalone `/sysroot/lib/start.c.obj` from the archive (so it can be
+passed explicitly on the ld command line, to force-include it without
+relying on archive-symbol scanning). When ld loads that standalone
+file, the archive-form filter does **not** match — and `.text._start`
+falls through every later filter until it lands in `.code00002`'s
+catch-all `*(.text.*)`.
+
+The link map gives this away: archive-loaded files appear as
+`libretrocrt.a(start.c.obj)`, standalone-loaded files appear as
+`/sysroot/lib/start.c.obj` — *with no parentheses*. Both formats name
+the same source object; the script's selector syntax distinguishes
+them.
+
+### What didn't work (and why)
+
+Tried adding file-path-form filters: `*/start.c.obj(.text.*)`,
+`*start.c.obj(.text.*)`, `/sysroot/lib/start.c.obj(.text.*)`. None
+matched. The link map didn't even list them as candidate selectors —
+GNU ld appears to silently ignore file-path-form selectors that contain
+no archive separator (`:`) when the broader script style is
+archive-form. This was disorienting because the GNU ld manual implies
+either form should work; in practice, mixing the two inside one
+SECTIONS block does not.
+
+### Fix that worked
+
+Use **section-name** selectors instead of file-name selectors:
+
+```
+*(.text._start)
+*(.text._start.*)
+```
+
+Section-name matching is file-agnostic. It pulls `.text._start` from
+whatever object provides it — archive member or standalone — without
+needing to predict ld's path-formatting. Added immediately *before*
+the `*/libretrocrt.a:*(.text.*)` catch-all so the archive catch-all
+still gets the rest of libretrocrt.
+
+### Verification
+
+Musashi harness on the rebuilt binary:
+
+```
+[setup] CODE 1 at 0x00200000 (9392 B)
+[setup] PC = 0x00200004 (entry trampoline)
+[run] pc=0x00200004 sp=0x00fffff0 a5=0x001004bc
+[trap @002003c2] $A9a0 (unknown)        <- Retro68Relocate calling
+[trap @002000fa] $Abff DebugStr              GetResource for segment 2+
+```
+
+200 instructions execute inside CODE 1 before the harness's
+stubbed-out Toolbox traps run dry — exactly the shape of a real boot.
+Linker map confirms `.text._start` at `0x00000d0e`, well inside
+`.code00001` (0–0x24ac).
+
+### General rules added
+
+1. **Prefer section-name selectors when a runtime-required symbol must
+   land in a specific output section.** File-name selectors are
+   fragile to how the object reaches ld (archive member vs standalone).
+2. **The link map is authoritative about which filters matched.** If
+   a filter you wrote doesn't appear in the map's input-section
+   listing, GNU ld silently rejected it — don't trust the script's
+   apparent syntax, trust the map.
+3. **Capture the link map (`-Map=...`) on every diagnostic link, and
+   pull it out of MEMFS into the host filesystem** when running ld via
+   Emscripten Module — the `-Map` path is inside the Module's MEMFS,
+   not the host's `/tmp`. A stale host-side map silently misled a
+   round of diagnosis on this exact bug.
