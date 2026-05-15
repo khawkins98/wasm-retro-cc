@@ -2598,3 +2598,36 @@ crt and the ld script are a matched pair**. Don't mix-and-match a
 assumptions the script must satisfy. If a runtime expects multi-seg,
 use multi-seg; the script's job is to encode the layout the runtime
 walks at startup.
+
+### Same `PROVIDE(_start)` bug, second time (2026-05-15 PM follow-up)
+
+Shipped wasm-retro-cc#24 (the multi-seg script) and the binary STILL
+silently exited at app launch. Caught this on a fresh diagnostic: built
+a CLI Musashi harness (cv-mac #89 / tools/m68k-runner/), ran our binary
+through it, watched the entry trampoline jump to memory address 0 after
+the `RTS`.
+
+Cause: the multi-seg script Elf2Mac emits ALSO contains
+`PROVIDE(_start = .)`. Same trap as the flat script — PROVIDE wins
+over the input-object definition on bare-ld. CODE 1's
+trampoline-offset immediate was `0x06` (= PROVIDE fallback), should
+have been `0x258c` (= libretrocrt's real `_start`).
+
+**Fix:** same patch — `sed s/PROVIDE(_start = .);/comment/` applied
+to `retro68-multiseg.ld` at bundle-build time. CODE 1's immediate now
+flips to `0x258c`, the trampoline jumps to the real _start, libretrocrt
+takes control. Verified Node-side (Musashi runs ~10k instructions
+before our incomplete trap stubs run out of context) — exactly the
+right shape for a real boot.
+
+**Lesson reinforced:** the patch we apply to one ld script must apply
+to ALL scripts in the bundle. The retro68-flat-cv.ld got the
+PROVIDE-strip treatment; the multi-seg copy didn't. **Audit checklist
+when shipping a bundle update:** for every ld script in the package,
+verify whether the PROVIDE(_start) line is present, and patch it if
+so.
+
+The harness's value showed immediately: 30 seconds of `m68k-run`
+output replaced a 30-minute deploy-and-test cycle that would have
+shown the same symptom (silent exit) without explaining where execution
+actually went. Building it once paid for itself on the first run.
