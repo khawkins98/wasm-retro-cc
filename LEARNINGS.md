@@ -1632,3 +1632,102 @@ not fundamentally riskier:
   document. Phase 2.1 entries here are now history, but the
   document's structure (decisions / landmines / file index) is
   the template for Phase 2.2 and beyond.
+
+
+---
+
+## Phase 2.1.x — MEMFS pipe-through, byte-equivalent codegen (2026-05-14, pass)
+
+**Status: derisk passed in one shot.** The wasm cc1 compiles real C
+source to real m68k assembly via MEMFS, byte-identical to what the
+native `m68k-apple-macos-cc1` emits for the same input.
+
+### What the harness proves
+
+`spike/wasm-cc1/test/memfs-pipe.mjs`:
+
+1. Imports `cc1.mjs` (the ES module from Phase 2.1's relink).
+2. Writes `int add(int a, int b) { return a + b; }` to `/tmp/test.c`
+   in MEMFS.
+3. Calls `Module.callMain(["-quiet", "-mcpu=68020", "/tmp/test.c", "-o", "/tmp/test.s"])`.
+4. Reads `/tmp/test.s` back out.
+5. Sanity-checks the assembly contains `link.w`, `move.l`, `add.l`,
+   `unlk`, `rts` — the expected m68k function prologue/epilogue +
+   add instruction.
+
+All pass. Exit code 0. Output (258 bytes):
+```
+add:
+        link.w %fp,#0
+        move.l 8(%fp),%d0
+        add.l 12(%fp),%d0
+        unlk %fp
+        rts
+# macsbug symbol
+        .byte 131
+        .ascii "add"
+        ...
+        .ident "GCC: (GNU) 12.2.0"
+```
+
+This matches the native build's output for the same source verbatim.
+
+### How the cc1 argv was derived
+
+Ran the stage 1 native cross-gcc with `-v` and grepped the cc1 line:
+
+```bash
+docker run --rm -v /tmp:/host wasm-retro-cc/phase2-1-builder:latest \
+  /spike/build/stage1/gcc/xgcc -B/spike/build/stage1/gcc/ \
+  -v -S /host/test.c -o /host/test.s
+```
+
+The grepped invocation:
+```
+cc1 -quiet -v -iprefix .../m68k-apple-macos/12.2.0/ \
+    -isystem .../include -isystem .../include-fixed \
+    -Wno-trigraphs /tmp/test.c -quiet \
+    -dumpdir /tmp/ -dumpbase test.c -dumpbase-ext .c \
+    -mcpu=68020 -version -o /tmp/test.s
+```
+
+For our header-free test source we dropped `-iprefix` /
+`-isystem` / `-dumpdir` / `-dumpbase*` / `-version`. They become
+required as soon as the source `#include`s anything (covered by the
+next sub-spike, sysroot vendoring).
+
+### Key wiring details (from the harness)
+
+```javascript
+const mod = await import("./cc1.mjs");
+const Module = await mod.default({
+  noInitialRun: true,                       // don't auto-run main
+  print:    (s) => stdout.push(s),
+  printErr: (s) => stderr.push(s),
+});
+Module.FS.writeFile("/tmp/test.c", source); // emscripten MEMFS
+const rc = Module.callMain([...]);          // throws ExitStatus on exit
+const asm = new TextDecoder().decode(
+  Module.FS.readFile("/tmp/test.s")
+);
+```
+
+`callMain` throws an `ExitStatus` exception on `exit()` rather than
+returning. Catch and read `.status`. `Module.FS` is the
+`EXPORTED_RUNTIME_METHOD` we put in LDFLAGS at relink time.
+
+### What this rules out
+
+The hypothesis "cc1.wasm loads but its m68k backend / option handling
+/ MEMFS interaction will reveal differences from the native build."
+It doesn't — the output is byte-identical. The remaining Phase 2.1
+sub-spikes are:
+
+- **2.1.y — sysroot vendoring.** Bake Retro68's CIncludes + Universal
+  Headers into MEMFS so cc1 can resolve `<Quickdraw.h>` etc. Strategy
+  TBD: Emscripten `--preload-file` at link time, or a tarball
+  unpacked into MEMFS at runtime by the JS harness.
+- **End-to-end test against `spike/hello_toolbox.c`.** Compile the
+  Phase 2.0 derisk source via the wasm cc1 and diff against the
+  native build. If equivalent, Phase 2.1 (the *whole* sub-spike, not
+  just the load test) is done.
