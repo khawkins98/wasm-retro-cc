@@ -1,18 +1,27 @@
 # wasm-retro-cc
 
-> **Status (May 2026): Phase 2 — porting Retro68 GCC to WebAssembly.**
-> All four compiler-toolchain binaries now WASM-ported and smoke-passing:
-> `cc1.wasm` (3.27 MB brotli, byte-identical to native), `as.wasm`
-> (270 KB brotli, byte-identical), `ld.wasm` (304 KB brotli), and
-> `Elf2Mac.wasm` (80 KB brotli, in convert-only mode via a stubbed
-> RealLD + a 240-LOC `MinimalElf` libelf replacement).
-> **Total in-browser toolchain: ~3.9 MB brotli** — comfortably under
-> the 6-8 MB target. Remaining: end-to-end glue (Phase 2.3d:
-> vendor libretrocrt/libInterface/libc archives into the sysroot)
-> + npm packaging (Phase 2.5).
-> Phase 1 (PCC native pipeline) is archived in [`spike-pcc/`](./spike-pcc/).
-> Tracking: [issue #11](https://github.com/khawkins98/wasm-retro-cc/issues/11),
-> cross-repo roadmap in [classic-vibe-mac #64](https://github.com/khawkins98/classic-vibe-mac/issues/64).
+> **Status (May 2026): Phase 2 SHIPPED.** End-to-end Build & Run
+> works in the [classic-vibe-mac](https://github.com/khawkins98/classic-vibe-mac)
+> playground as of 2026-05-15. Click Build & Run on
+> [`wasm-hello/hello.c`](https://github.com/khawkins98/classic-vibe-mac/tree/main/src/app/wasm-hello)
+> in the browser; this toolchain produces a MacBinary II APPL from C
+> source and it boots cleanly in BasiliskII — "Hello, World!"
+> rendered via `DrawString`. First time anyone has compiled classic
+> Mac C in a tab and watched it launch.
+>
+> All four WASM binaries are byte-identical-or-equivalent to native:
+> `cc1.wasm` (3.27 MB brotli), `as.wasm` (270 KB brotli),
+> `ld.wasm` (304 KB brotli), `Elf2Mac.wasm` (80 KB brotli) — total
+> **~3.9 MB brotli** in-browser toolchain, comfortably under the
+> 6-8 MB target. Vendored into classic-vibe-mac as
+> `sysroot-libs.bin` + the four `.wasm`/`.mjs` files under
+> `public/wasm-cc1/`.
+>
+> Phase 1 (PCC native pipeline) archived in [`spike-pcc/`](./spike-pcc/).
+> Phase 2 sub-spike tracker [#11](https://github.com/khawkins98/wasm-retro-cc/issues/11)
+> closed. What's next for the playground's in-browser C path tracked in
+> [classic-vibe-mac #100](https://github.com/khawkins98/classic-vibe-mac/issues/100)
+> (multi-file C, mixed C+.r, backend abstraction).
 
 A WebAssembly C compiler targeting the classic Macintosh 68k, designed
 for use inside browser-based emulators like
@@ -20,17 +29,47 @@ for use inside browser-based emulators like
 
 ---
 
-## Phase 2 status
+## Phase 2 status — shipped 2026-05-15
 
-| What's done | In progress / to do | Won't do (out of scope) |
+All Phase 2 sub-spikes complete. The compiler chain runs end-to-end
+in production: a user clicks Build & Run in the cv-mac playground, a
+`.c` source file is compiled in-browser through cc1 → as → ld →
+Elf2Mac → MacBinary II, hot-loaded into BasiliskII, and the app
+launches and draws to the screen. See cv-mac PR
+[#97](https://github.com/khawkins98/classic-vibe-mac/pull/97) for the
+final fix (the missing `--emit-relocs` ld flag — found in 45 minutes
+by diff-ing our ld invocation against the canonical Retro68 docker
+build; see LEARNINGS for the meta-lesson).
+
+| Sub-spike | What it produced | Status |
 | --- | --- | --- |
-| ✅ Phase 2.0 — Retro68 GCC vendoring derisk. Reference binary built from `hello_toolbox.c` via the pinned Retro68 image; vendored into classic-vibe-mac; verified end-to-end on deployed playground (DrawString renders "Hello, World!"). See PRs wasm-retro-cc#13 and cv-mac#78. | 🟡 Phase 2.1.x — MEMFS pipe-through. `cc1.wasm` loads + answers `--help`; next: wire MEMFS so a real `.c` source in → `.s` assembly out. Infrastructure already linked (`FS`, `allocateUTF8`, `callMain`). | ❌ **C++ support.** Phase 2 is C-only (`--enable-languages=c`). Cuts ~60% of GCC's frontend mass; Classic Mac C is the only target users care about. |
-| ✅ Phase 2.1 — `cc1.wasm`. **12 MB raw / 3.3 MB brotli**. Compiles `spike/hello_toolbox.c` against full Retro68 sysroot → m68k assembly **byte-identical to native** (`diff` exit 0). 8-round iteration trail. See [`spike/wasm-cc1/`](./spike/wasm-cc1/). | 🟡 Phase 2.3d — End-to-end glue. All four wasm binaries exist and smoke-pass; remaining is vendoring `libretrocrt.a` / `libInterface.a` / `libc.a` into the sysroot, generating an ld script (Elf2Mac normally produces this — convert-only mode delegates to JS host), and wiring the four into a `compile(sources) → {bin}` JS API. | ❌ **GCC's full bootstrap.** `--disable-bootstrap`. Stage 2 builds with host gcc only. Self-hosting cc1 inside WASM is impossible without the runtime we're building. |
-| ✅ Phase 2.2 — `as.wasm`. **782 KB raw / 270 KB brotli**. Assembles cc1's `.s` output → m68k ELF32 object file, **byte-identical to native** (`diff` exit 0). One-shot success — Phase 2.1 lessons transferred without iteration. See [`spike/wasm-binutils/`](./spike/wasm-binutils/). | ⬜ Phase 2.4 — Bundle-size optimisation. Already at ~3.9 MB brotli for all four binaries combined (`-Os -g0` opportunistically applied during 2.1-2.3). Remaining lever: strip unused m68k subtargets, LTO across libbackend.a, treeshake libcpp. | ❌ **Driver / `collect2` / link-stage runner.** Emscripten has no `fork`/`exec`. JS host orchestrates the four wasm tools with cooked argv. Same pattern in our Elf2Mac convert-only port (RealLD stubbed). |
-| ✅ Phase 2.3a — `ld.wasm`. **1.0 MB raw / 304 KB brotli**. Smoke passes (`--version`, `--help`); supports `elf32-m68k` target, `m68kelf` emulation. | ⬜ Phase 2.5 — npm package mirroring [`wasm-rez`](https://github.com/khawkins98/wasm-rez)'s API. Wire into classic-vibe-mac's playground. Sysroot bundling strategy (preload-file vs fetched tarball) decided here. | ❌ **PowerPC / CFM / Mac OS 8 / SheepShaver.** Long-term aspiration, not Phase 2. We target 68040 Quadra-650 under BasiliskII. |
-| ✅ Phase 2.3b/c — `Elf2Mac.wasm`. **285 KB raw / 80 KB brotli**. Converts m68k ELF → MacBinary II. Hand-rolled `MinimalElf` (240 LOC C++) replaces libelf — drop-in API, big-endian Elf32 reads, byte-swap on read. RealLD stubbed for convert-only mode (JS host orchestrates ld externally). See [`spike/wasm-elf2mac/`](./spike/wasm-elf2mac/). | | ❌ **In-browser compilation of the Retro68 SDK headers themselves.** Headers are pre-built; only user code goes through wasm cc1. |
-| ✅ Phase 2 research baseline. Closest precedent (Emception) reverse-engineered, canadian-cross recipe + Emscripten link flags + memory-snapshot reset trick all captured in [`LEARNINGS.md`](./LEARNINGS.md). | | |
-| ✅ Cross-repo integration plumbing reused from Phase 1: HFS patcher, MacBinary inspector, Playwright boot tester, SHA + info.txt diagnostics. | | |
+| Phase 2.0 — Retro68 GCC vendoring derisk | Reference binary built from `hello_toolbox.c` boots end-to-end on deployed playground (PRs #13, cv-mac#78) | ✅ shipped |
+| Phase 2.1 — `cc1.wasm` | 12 MB raw / 3.3 MB brotli. Compiles `.c` → m68k `.s`, byte-identical to native. See [`spike/wasm-cc1/`](./spike/wasm-cc1/) | ✅ shipped |
+| Phase 2.2 — `as.wasm` | 782 KB raw / 270 KB brotli. Assembles `.s` → ELF32 `.o`, byte-identical to native. See [`spike/wasm-binutils/`](./spike/wasm-binutils/) | ✅ shipped |
+| Phase 2.3a — `ld.wasm` | 1.0 MB raw / 304 KB brotli. m68k ELF linker. | ✅ shipped |
+| Phase 2.3b/c — `Elf2Mac.wasm` | 285 KB raw / 80 KB brotli. ELF → MacBinary II. Hand-rolled `MinimalElf` (240 LOC C++) replaces libelf. See [`spike/wasm-elf2mac/`](./spike/wasm-elf2mac/) | ✅ shipped |
+| Phase 2.3d — End-to-end glue | sysroot-libs.bin bundle (libretrocrt, libInterface, libc, libm, libgcc + Retro68 universal headers + the multi-seg ld script), packaged via [`scripts/build-show-asm-bundle.mjs`](./scripts/build-show-asm-bundle.mjs); vendored into cv-mac as `public/wasm-cc1/` | ✅ shipped |
+| Phase 2.4 — Bundle-size optimisation | ~3.9 MB brotli total (`-Os -g0` applied during 2.1-2.3). Comfortably under the 6-8 MB target. | ✅ shipped |
+| Phase 2.5 — packaging | Vendored directly into cv-mac as artifact files rather than npm — same outcome, lower coupling. The `build-show-asm-bundle.mjs` script generates the bundle that cv-mac consumes. | ✅ shipped (different shape than originally planned) |
+
+### Out of scope (explicit non-goals from Phase 2)
+
+These are deliberately not in this toolchain:
+
+- **C++ support.** Phase 2 was C-only (`--enable-languages=c`). Cuts ~60% of GCC's frontend mass; Classic Mac C is the user-visible target.
+- **GCC's full bootstrap.** `--disable-bootstrap`. Stage 2 builds with host gcc only.
+- **Driver / `collect2` / link-stage runner.** Emscripten has no `fork`/`exec`. JS host orchestrates the four wasm tools with cooked argv. The classic-vibe-mac side's `compileToBin` is the orchestration layer; see [LEARNINGS Key Story #5](https://github.com/khawkins98/classic-vibe-mac/blob/main/LEARNINGS.md) for why this bypass of the GCC driver is the largest source of subtle bug-class differences vs canonical Retro68 builds.
+- **PowerPC / CFM / Mac OS 8 / SheepShaver.** Long-term aspiration, separate stack. Tracked in [classic-vibe-mac #98](https://github.com/khawkins98/classic-vibe-mac/issues/98).
+- **In-browser compilation of the Retro68 SDK headers themselves.** Headers are pre-built; only user code goes through wasm cc1.
+
+### What's next
+
+Forward-looking work moved to the cv-mac repo, where the toolchain is
+consumed:
+
+- [classic-vibe-mac #100](https://github.com/khawkins98/classic-vibe-mac/issues/100) — Multi-file C support, mixed C + `.r` projects, backend abstraction layer that future PowerPC / other-target ports can slot into without re-plumbing.
+- [classic-vibe-mac #98](https://github.com/khawkins98/classic-vibe-mac/issues/98) — PowerPC investigation (long-term).
+- [classic-vibe-mac #89](https://github.com/khawkins98/classic-vibe-mac/issues/89) — Musashi 68k harness opportunistic expansion.
 
 Phase 1 (PCC m68k → MacBinary II native pipeline) is archived in
 [`spike-pcc/`](./spike-pcc/). Three real bugs fixed during that
