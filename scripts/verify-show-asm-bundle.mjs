@@ -198,6 +198,12 @@ const oBytes = as.Module.FS.readFile("/tmp/out.o");
 console.log(`[verify]   as:  ${oBytes.length} B .o`);
 
 // Stage 3: ld.
+// Link order matters — `start.c.obj` first (before any .a) so the
+// real libretrocrt `_start` satisfies the ld script's ENTRY ahead of
+// the script's `PROVIDE(_start = .)` fallback. Without that, the
+// trampoline jumps to a bare RTS and `main` never runs. Plus libgcc.a
+// + `--start-group` so soft-divide / soft-mul helpers and cross-archive
+// references resolve. See LEARNINGS "Phase 2.3d — _start fallback".
 const ld = await loadTool("ld.mjs", { mountHeaders: false, mountLibs: true });
 ld.Module.FS.writeFile("/tmp/in.o", oBytes);
 rc = callMain(ld, [
@@ -205,10 +211,15 @@ rc = callMain(ld, [
   "-L", "/sysroot/lib",
   "--no-warn-rwx-segments",
   "-o", "/tmp/out.gdb",
+  "/sysroot/lib/start.c.obj",
   "/tmp/in.o",
+  "--start-group",
   "/sysroot/lib/libretrocrt.a",
   "/sysroot/lib/libInterface.a",
   "/sysroot/lib/libc.a",
+  "/sysroot/lib/libm.a",
+  "/sysroot/lib/libgcc.a",
+  "--end-group",
 ]);
 if (rc !== 0) { console.error(`[verify] ld failed`); process.exit(rc); }
 const elfBytes = ld.Module.FS.readFile("/tmp/out.gdb");
