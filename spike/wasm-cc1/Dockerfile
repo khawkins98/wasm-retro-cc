@@ -33,6 +33,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
       python3 python-is-python3 \
       bison flex texinfo \
       libgmp-dev libmpfr-dev libmpc-dev libisl-dev \
+      libboost-all-dev libelf-dev \
       git cmake ninja-build curl xz-utils ca-certificates \
       brotli \
       && rm -rf /var/lib/apt/lists/*

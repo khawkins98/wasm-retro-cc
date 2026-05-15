@@ -1915,3 +1915,81 @@ Binutils) 2.39". The hard part of Phase 2.3 will be:
 
 But all the **Canadian-cross machinery is solved.** No new build-
 system iterations expected.
+
+
+---
+
+## Phase 2.3 — ld done, Elf2Mac partial (2026-05-15, paused)
+
+### What landed
+
+- **`ld.wasm` (1.0 MB) + `ld.mjs` (80 KB)** — built alongside `as`
+  in the Phase 2.2 stage 2 run. Smoke passes (`--version`,
+  `--help`). Supports `elf32-m68k` target with `m68kelf` emulation.
+- **Native `Elf2Mac` (240 KB Linux ELF)** — Phase 2.3 stage 1 builds
+  cleanly via cmake with three patches applied to Retro68's source
+  (`spike/wasm-elf2mac/build.sh` `prepare_resourcefiles`):
+  1. `boost::filesystem` → `std::filesystem` (avoids needing wasm-
+     compiled Boost.Filesystem, which Emscripten doesn't ship).
+  2. Add missing transitive standard includes (`<vector>`,
+     `<functional>`, `<algorithm>`) that `<boost/filesystem.hpp>`
+     was pulling in implicitly.
+  3. Strip `ResInfo` executable target (depends on
+     Boost.program_options, not needed for Elf2Mac).
+- **HFS stub** (`spike/wasm-elf2mac/hfs-stub.{c,h}`) — Retro68's
+  ResourceFile.cc has one method that writes `.dsk` HFS volumes via
+  libhfs. Elf2Mac never calls that method; the stub satisfies the
+  compile-time include + link-time symbol resolution with no-ops.
+
+### What blocks the wasm port
+
+`Elf2Mac` depends on **libelf** (`gelf.h`, `elf_nextscn`,
+`gelf_getshdr`, `elf_strptr`, `gelf_getsym`, …) for ELF parsing.
+Available on the host via `libelf-dev` (Ubuntu), but:
+
+- Emscripten doesn't ship a port for libelf (their catalog has boost,
+  sdl, freetype, etc. — not libelf).
+- Host's `libelf.so` / `libelf.a` is aarch64-native; can't link
+  against wasm32 objects.
+- No `--use-port=libelf` available.
+
+### Path forward (Phase 2.3.x — next session)
+
+Three viable approaches; preference is **(a)** for size + clarity:
+
+**(a) Build libelf for wasm.** Get `elfutils` source from
+[sourceware](https://sourceware.org/elfutils/), apply the standard
+Canadian-cross treatment (CONFIG_SITE, `--host=wasm32-emscripten`,
+`--disable-debuginfod` + `--disable-libdebuginfod`, `-Os -g0`). Link
+the resulting `libelf.a` into the wasm Elf2Mac. Estimated effort:
+1-3 hours, mostly autoconf iteration following the Phase 2.1/2.2
+playbook.
+
+**(b) Hand-roll a minimal ELF parser.** Elf2Mac uses ~12 libelf
+calls. Replace them with direct struct reads against `elf.h` (which
+emcc has). Cuts the dependency, but introduces hand-written ELF
+parsing code we have to maintain forever. Less attractive long-term.
+
+**(c) Defer and use a Docker call-out.** Until Elf2Mac is in-browser,
+the playground could keep using the Phase 2.0 vendoring path: cv-mac
+fetches CI-built `.bin` files. That ships Phase 2 partial but loses
+the "compile in browser end-to-end" promise.
+
+**Decision (paused-here):** Go with (a) when picking this back up.
+The libelf source is ~10 K LOC; same wasm-cross pattern; no novel
+landmines expected.
+
+### Bytes-of-progress summary
+
+| Stage  | Status | Artefact | Brotli |
+| --- | --- | --- | --- |
+| Phase 2.0 | ✅ | hello-toolbox-retro68.bin (vendored) | 12 KB |
+| Phase 2.1 | ✅ | cc1.wasm + cc1.mjs | 3.3 MB |
+| Phase 2.2 | ✅ | as.wasm + as.mjs | 270 KB |
+| Phase 2.3a | ✅ | ld.wasm + ld.mjs | 304 KB |
+| Phase 2.3b | 🟡 | Elf2Mac.wasm (blocked on libelf wasm port) | est. ~150 KB |
+|  | **Total so far** | | **3.9 MB brotli** |
+
+Compiler + assembler + linker = **3.9 MB brotli** in-browser. Even
+with Elf2Mac.wasm added (~150 KB), the full pipeline fits comfortably
+under the original 6-8 MB target.
