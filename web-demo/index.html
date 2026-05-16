@@ -201,6 +201,48 @@
 
     .content__inner { padding: 14px 24px 32px; }
 
+    /* ── "EMATE 300"-style callout boxes ─────────────────────────── */
+    /* The original apple.com 1997 right column carried two stacked
+       framed promo cards (EMATE 300, MOVIES FROM MARS) — bold red
+       header bar over a body paragraph. We don't have a right column
+       (the demo wants the panes wide), so the boxes sit in a row
+       under the "What's Hot" disclosure. Stack on narrow viewports. */
+    .promo-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin: 4px 0 18px;
+    }
+    .promo-card {
+      border: 1px solid var(--apple-red);
+      background: linear-gradient(#fffaf2, #f3ece0);
+      box-shadow: 1px 1px 0 rgba(170, 14, 26, 0.25);
+    }
+    .promo-card--primary {
+      background: linear-gradient(#fff8f6, #f6ddd9);
+    }
+    .promo-card__head {
+      background: var(--apple-red);
+      color: white;
+      padding: 4px 10px;
+      font-family: var(--serif);
+      font-size: 12px;
+      font-weight: bold;
+      letter-spacing: 0.18em;
+      border-bottom: 1px solid var(--apple-red-deep);
+    }
+    .promo-card__body {
+      padding: 8px 12px 12px;
+      font-family: var(--serif);
+      font-size: 14px;
+      line-height: 1.45;
+      color: var(--ink);
+    }
+    .promo-card__body strong { display: inline; }
+    @media (max-width: 820px) {
+      .promo-row { grid-template-columns: 1fr; }
+    }
+
     /* ── "What's Hot" disclosure (was: ELI10) ──────────────────────── */
     .eli10 { margin: 0 0 18px; }
     .eli10 summary {
@@ -609,6 +651,38 @@
       </p>
     </div>
   </details>
+
+  <!-- Period-correct "What's New" callout row, à la apple.com's
+       EMATE 300 / MOVIES FROM MARS right-column boxes. Two stacked
+       cards (mobile collapses them). Each is a thin red-framed box
+       with a bold red header bar and one quick paragraph of pitch. -->
+  <div class="promo-row">
+    <aside class="promo-card promo-card--primary">
+      <div class="promo-card__head">21 SAMPLE APPS</div>
+      <div class="promo-card__body">
+        <strong>Edit one. Build it. Watch the Mac launch it.</strong>
+        Click over to
+        <a href="https://khawkins98.github.io/classic-vibe-mac/">classic-vibe-mac</a>
+        for a System 7.5.5 desktop in your browser plus 21
+        in-browser-buildable wasm samples — Snake, a Note Pad,
+        a small word processor, an analog clock, a paint app,
+        and more. Edit the C, hit <em>Build &amp; Run</em>, the
+        Mac re-launches with your changes about a second later.
+      </div>
+    </aside>
+    <aside class="promo-card">
+      <div class="promo-card__head">SHIP IT TO 1989</div>
+      <div class="promo-card__body">
+        Your <code>.bin</code> is a single-fork MacBinary II APPL —
+        the same shape developers handed Apple on floppy disks
+        thirty-odd years ago. Drop it into
+        <a href="https://basilisk.cebix.net/">Basilisk II</a>,
+        <a href="https://www.gryphel.com/c/minivmac/">Mini vMac</a>,
+        <a href="https://sheepshaver.cebix.net/">SheepShaver</a>,
+        or an actual 68k Macintosh, and it boots.
+      </div>
+    </aside>
+  </div>
 
 <section class="demo-panes">
   <div class="toolbar">
