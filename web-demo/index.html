@@ -120,13 +120,15 @@
 <header>
   <h1>wasm-retro-cc</h1>
   <p>
-    A WebAssembly toolchain that compiles C source into a classic
-    Macintosh 68k MacBinary II APPL — <strong>entirely in your browser</strong>.
-    Click <em>Compile</em> below to run the full pipeline on the
-    bundled <code>hello.c</code>, then download the <code>.bin</code>
-    and drop it into any classic Mac emulator. Source on
-    <a href="https://github.com/khawkins98/wasm-retro-cc">GitHub</a> —
-    a fuller editor lives at
+    A WebAssembly build of the
+    <a href="https://github.com/autc04/Retro68">Retro68</a> toolchain.
+    It compiles C source into a real classic Macintosh 68k app,
+    <strong>all in your browser</strong>. Click <em>Compile</em>
+    below and the bundled <code>hello.c</code> goes through the full
+    pipeline. The <code>.bin</code> that drops out runs on a 1989 Mac
+    (or any classic emulator). Source on
+    <a href="https://github.com/khawkins98/wasm-retro-cc">GitHub</a>.
+    For a fuller editor with a System 7 desktop attached, see
     <a href="https://khawkins98.github.io/classic-vibe-mac/">classic-vibe-mac</a>.
   </p>
 
@@ -134,130 +136,119 @@
     <summary>What's actually happening here?</summary>
     <div class="eli10__body">
       <p>
-        A "compiler" is a program that turns C source code into a real,
-        runnable app. Normally, the compiler for old Macintosh apps only
-        runs on a Mac — or, more recently, on a Linux/macOS machine with
-        a non-trivial cross-toolchain installed.
+        A compiler is a program that turns C code into a runnable app.
+        For 1980s Macs, that compiler used to only run on a Mac. There
+        are modern ports you can install on Linux or macOS, but they
+        take a non-trivial setup.
       </p>
       <p>
-        What this page does: takes that compiler — actually
-        <em>four</em> programs that work together — and runs each of
-        them <strong>inside a web page</strong>. Press <em>Compile</em>
-        and your C source goes through this chain, all in your tab:
+        On this page, it runs in a tab. When you hit <em>Compile</em>,
+        your C source flows through four old tools we packed into
+        WebAssembly:
       </p>
       <ol>
-        <li><strong>cc1</strong> — the C compiler from
-            <a href="https://gcc.gnu.org/">GCC</a> — turns your C into
-            assembly language for the Motorola 68000 chip a real
-            classic Mac uses.</li>
-        <li><strong>as</strong> — the assembler from
-            <a href="https://www.gnu.org/software/binutils/">GNU binutils</a> —
-            turns assembly into machine code (an ELF object file).</li>
-        <li><strong>ld</strong> — the linker, also from GNU binutils —
-            stitches your object together with the classic Mac runtime
-            so it becomes a complete program.</li>
-        <li><strong>Elf2Mac</strong> — the file-format converter from
-            <a href="https://github.com/autc04/Retro68">Retro68</a> —
-            repackages the result as a <em>MacBinary&nbsp;II</em> file,
-            the wrapper a real Macintosh from 1989 knows how to launch.</li>
+        <li><strong>cc1</strong> from
+            <a href="https://gcc.gnu.org/">GCC</a> compiles your C into
+            Motorola 68000 assembly.</li>
+        <li><strong>as</strong> from
+            <a href="https://www.gnu.org/software/binutils/">GNU binutils</a>
+            assembles that into an ELF object file.</li>
+        <li><strong>ld</strong> (also binutils) links the object with
+            the classic Mac runtime.</li>
+        <li><strong>Elf2Mac</strong> from
+            <a href="https://github.com/autc04/Retro68">Retro68</a>
+            wraps the linked output as a MacBinary&nbsp;II file, the
+            format a 1989 Mac knows how to launch.</li>
       </ol>
       <p>
-        The <code>.bin</code> you download is bit-for-bit the same kind
-        of file you'd have gotten on a floppy in 1989 — drop it into
-        any classic Mac emulator (Basilisk&nbsp;II, Mini&nbsp;vMac,
-        SheepShaver, an actual old Mac) and it boots.
+        The resulting <code>.bin</code> is bit-for-bit the same kind of
+        file you'd have gotten on a floppy disk in 1989. Drop it into
+        Basilisk&nbsp;II, Mini&nbsp;vMac, SheepShaver, or an actual
+        old Mac, and it boots.
       </p>
 
-      <h3>Credit where credit is due</h3>
+      <h3>Credit where it's due</h3>
       <p>
-        Almost none of the heavy lifting is ours — the toolchains above
-        represent decades of work by other people:
+        Almost everything you're seeing is other people's work:
       </p>
       <ul>
         <li>
-          <strong><a href="https://github.com/autc04/Retro68">Retro68</a></strong>
-          — Wolfgang Thaller's open-source modern cross-compiler
-          toolchain for classic 68k Macs. Retro68 is what makes
-          compiling C for 1989 Macs from a 2020s computer possible at
-          all; we just re-wrap it for the browser. <code>Elf2Mac</code>
-          is Retro68's, and our GCC + binutils builds are configured
-          against Retro68's patches and Universal&nbsp;Headers.
+          <a href="https://github.com/autc04/Retro68"><strong>Retro68</strong></a>
+          by <strong>Wolfgang Thaller</strong> is the cross-compiler
+          toolchain we packed up. Without it, none of this would be
+          possible. <code>Elf2Mac</code> is theirs, and the GCC and
+          binutils builds we ship are configured against their patches
+          and the Apple Universal&nbsp;Headers they distribute.
         </li>
         <li>
-          <strong><a href="https://gcc.gnu.org/">GCC</a></strong> — the
-          GNU Compiler Collection. <code>cc1</code> here is GCC's C
-          frontend, configured to emit m68k assembly.
+          <a href="https://gcc.gnu.org/"><strong>GCC</strong></a> gives
+          us <code>cc1</code>, the C compiler frontend, configured to
+          emit m68k assembly.
         </li>
         <li>
-          <strong><a href="https://www.gnu.org/software/binutils/">GNU&nbsp;binutils</a></strong>
-          — the assembler (<code>as</code>) and linker (<code>ld</code>).
+          <a href="https://www.gnu.org/software/binutils/"><strong>GNU&nbsp;binutils</strong></a>
+          gives us <code>as</code> and <code>ld</code>.
         </li>
         <li>
-          <strong><a href="https://emscripten.org/">Emscripten</a></strong>
-          — what compiled the four C/C++ programs above into the
-          WebAssembly modules running in your tab right now.
+          <a href="https://emscripten.org/"><strong>Emscripten</strong></a>
+          is how those four native C/C++ programs became the
+          WebAssembly running in your tab.
         </li>
         <li>
-          <strong><a href="https://github.com/autc04/Universal-Headers">Apple's
-          Universal&nbsp;Headers</a></strong> (the System 7-era Toolbox
-          API declarations) — included via Retro68 so
-          <code>#include &lt;Windows.h&gt;</code> resolves to the same
-          definitions a 1990s Mac developer would have used.
+          <a href="https://github.com/autc04/Universal-Headers"><strong>Apple's
+          Universal&nbsp;Headers</strong></a> (the System 7-era Toolbox
+          API declarations) come along for the ride, so
+          <code>#include &lt;Windows.h&gt;</code> means the same thing
+          here as it did in 1992.
         </li>
       </ul>
 
-      <h3>So what's unique about <em>this</em> project?</h3>
+      <h3>So what's new here?</h3>
       <p>
-        The <strong>glue</strong>, and the <strong>pipeline that brings
-        it all together in a browser tab</strong>. Concretely:
+        The glue, and the pipeline that ties it together inside a
+        browser tab. That means:
       </p>
       <ul>
         <li>
-          A four-stage in-browser driver
-          (<a href="./compile.mjs">compile.mjs</a>) that wires the four
-          wasm tools into a single C-source-in / MacBinary-out call.
+          a small JavaScript driver
+          (<a href="./compile.mjs">compile.mjs</a>) that runs the four
+          wasm tools end-to-end, source in, MacBinary out;
         </li>
         <li>
-          A bundle-packaging script that ships the Retro68 sysroot as a
-          single brotli-friendly blob plus a JSON index — so the
-          browser fetches one 1.1&nbsp;MB blob instead of 220
-          individual header files.
+          a packaging script that ships the Retro68 sysroot as one
+          brotli-friendly blob plus a JSON index, so your browser
+          fetches a single 1.1&nbsp;MB file instead of 220 individual
+          header files;
         </li>
         <li>
-          Synthetic umbrella-header shims (<code>Controls.h</code>,
-          <code>Lists.h</code>, <code>Scrap.h</code>,
-          <code>QDOffscreen.h</code>, …) so the in-browser sysroot
-          behaves the same as a native Retro68 install for the headers
-          a typical Mac C program reaches for.
+          synthetic shims for the umbrella headers
+          (<code>Controls.h</code>, <code>Lists.h</code>,
+          <code>Scrap.h</code>, <code>QDOffscreen.h</code>) that the
+          consolidated in-browser sysroot doesn't ship as separate
+          files;
         </li>
         <li>
-          Workarounds for the dozens of bugs that turned up along the
-          way — wasm trap inputs, ld archive-scan ordering, missing
-          relocation records, the SIZE-resource-required-for-startup
-          fault, and others. The full play-by-play of getting four
-          mid-1990s native tools to cooperate in a sandboxed JavaScript
-          engine is in
-          <strong><a href="https://github.com/khawkins98/wasm-retro-cc/blob/main/LEARNINGS.md">LEARNINGS.md</a></strong>
-          — start with the dated entries at the bottom for the most
-          recent fixes.
+          workarounds for the dozens of small bugs that turn up when
+          you make four mid-1990s native tools cooperate inside a
+          JavaScript engine. The whole story is in
+          <a href="https://github.com/khawkins98/wasm-retro-cc/blob/main/LEARNINGS.md"><strong>LEARNINGS.md</strong></a>.
         </li>
       </ul>
 
-      <h3>What can you do with it?</h3>
+      <h3>What you can do with it</h3>
       <p>
-        <strong>Compile basic Macintosh programs in pure JavaScript</strong>
-        — no server, no Docker, no toolchain install. The Compile
-        button below is the smallest demonstration:
-        <code>hello.c</code> → <code>.bin</code> → drop into any
-        classic Mac emulator.
+        Compile basic Mac programs from a web page. No server, no
+        Docker, no toolchain to install. The Compile button below
+        is the smallest example: edit <code>hello.c</code>, hit
+        Compile, drop the <code>.bin</code> into any classic Mac
+        emulator.
       </p>
       <p>
-        For fuller-featured examples — a System 7 desktop running in
-        your browser, 21 editable sample apps, hot-load-on-build, an
-        in-tab editor with Find/Replace and build diagnostics — see
-        the sibling
-        <strong><a href="https://khawkins98.github.io/classic-vibe-mac/">classic-vibe-mac</a></strong>
-        playground. Same toolchain, more chrome around it.
+        For more — a System 7 desktop running in your browser, 21
+        sample apps you can edit, hot-loading builds, an in-tab editor
+        with Find/Replace and build diagnostics — open
+        <a href="https://khawkins98.github.io/classic-vibe-mac/"><strong>classic-vibe-mac</strong></a>.
+        Same toolchain underneath, with a working Mac wrapped around it.
       </p>
     </div>
   </details>

@@ -254,21 +254,22 @@ export async function compile(source, sourceName = "hello.c") {
     "ok",
   );
   log(
-    `  breakdown: ${fmt(fetchTotal)} fetching wasm + sysroot ` +
-      `(${fetchPct}%), ${fmt(runTotal)} actually compiling ` +
-      `(${100 - fetchPct}%)`,
+    `  ${fmt(fetchTotal)} (${fetchPct}%) loading the toolchain, ` +
+      `${fmt(runTotal)} (${100 - fetchPct}%) actually compiling.`,
   );
   if (!isWarm) {
     log(
-      `  cold tab: cc1.wasm is ~3.3 MB brotli, sysroot.bin ~190 KB ` +
-        `brotli, libs blob ~1 MB brotli. Once cached the next compile ` +
-        `skips the network and runs in the "actually compiling" time only.`,
+      `  First compile is the slow one. cc1.wasm alone is ~3.3 MB ` +
+        `brotli; the sysroot adds another ~1.2 MB. Once your browser ` +
+        `has those cached, every subsequent compile skips the fetch ` +
+        `and only the "actually compiling" time remains.`,
     );
   } else {
     log(
-      `  warm tab: wasm + sysroot served from the browser HTTP cache ` +
-        `— the remaining "fetch+init" time is Emscripten Module ` +
-        `instantiation + the FS mounts (~200 file writes).`,
+      `  Warm cache: the wasm + sysroot came from the browser cache. ` +
+        `What's left in "loading the toolchain" is Emscripten Module ` +
+        `instantiation plus mounting ~200 header files into the in-` +
+        `memory filesystem each tool sees.`,
     );
   }
   return { ok: true, asm, bin };
