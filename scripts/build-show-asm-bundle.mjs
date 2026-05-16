@@ -110,6 +110,52 @@ const TOOLS = [
 const HEADER_SUBTREES = ["gcc-include", "include"];
 const HEADER_EXCLUDE_PREFIXES = ["include/c++/"];
 
+// Synthetic umbrella-header shims. Retro68's wasm sysroot consolidates
+// every Toolbox API into one big `Multiverse.h`, so writers reaching for
+// the per-subsystem Universal-Headers umbrellas (Controls.h, Lists.h,
+// etc.) get "No such file or directory". Each shim is a tiny re-export
+// that pulls Multiverse.h in — keeps consumer code portable between the
+// in-browser sysroot and a native Retro68 install without #ifdef
+// gymnastics.
+//
+// Added 2026-05-16 after a wasm-shelf audit found wasm-scrollwin failing
+// the in-browser build solely because it #included <Controls.h>. The
+// fix in cv-mac #173 was to drop the include; this shim makes that
+// fix unnecessary for any future sample. Discussed in cv-mac
+// src/app/README.md → "In-browser sysroot quirks worth knowing".
+//
+// Cost: ~6 entries × ~100 bytes each ≈ 600 bytes added to the headers
+// blob (negligible against the existing 1.1 MB).
+const SYNTHETIC_HEADERS = {
+  // Mac Toolbox subsystem umbrellas. Every one of these would be a
+  // standalone .h in Retro68's `RIncludes/CIncludes/` tree on a native
+  // install. We synthesise lightweight stubs so `#include <Controls.h>`
+  // and friends resolve cleanly in the in-browser cc1.
+  "include/Controls.h": SHIM("Controls.h", "Control Manager"),
+  "include/Lists.h":    SHIM("Lists.h",    "List Manager"),
+  "include/Scrap.h":    SHIM("Scrap.h",    "Scrap Manager"),
+  "include/Aliases.h":  SHIM("Aliases.h",  "Alias Manager"),
+  "include/Palettes.h": SHIM("Palettes.h", "Palette Manager"),
+  "include/QDOffscreen.h": SHIM("QDOffscreen.h", "Offscreen QuickDraw / GWorld"),
+};
+function SHIM(name, friendly) {
+  return `/* ${name} — synthetic shim header (wasm-retro-cc bundle, 2026-05-16).
+ *
+ * The in-browser sysroot consolidates every Mac Toolbox API into
+ * Multiverse.h instead of shipping the per-subsystem umbrella headers
+ * separately. This shim makes \`#include <${name}>\` resolve to the
+ * same prototypes a native Retro68 install would expose, so source
+ * works in both the playground and a Docker-built CMake target.
+ *
+ * Subsystem: ${friendly}. Prototypes themselves live in <Multiverse.h>.
+ */
+#ifndef __${name.replace(/[^A-Za-z0-9_]/g, "_").toUpperCase()}__
+#define __${name.replace(/[^A-Za-z0-9_]/g, "_").toUpperCase()}__
+#include <Multiverse.h>
+#endif
+`;
+}
+
 // "Lib" subtrees we want for the full-pipeline path (Build .c → .bin).
 // `lib/` has many archives; only a handful are referenced by a C-only
 // Retro68 link. Whitelist by basename:
@@ -299,7 +345,7 @@ for (const [srcDir, mjs, wasm] of TOOLS) {
 // filesystem (Linux container or APFS case-sensitive volume). Until
 // then, this works for the headers newlib actually `#include`s.
 function packBlob(blobName, indexName, options) {
-  const { subtrees, keepEntry } = options;
+  const { subtrees, keepEntry, synthetic } = options;
   const files = [];
   for (const sub of subtrees) {
     const base = join(SYSROOT_SRC, sub);
@@ -321,6 +367,23 @@ function packBlob(blobName, indexName, options) {
     chunks.push(bytes);
     offset += bytes.length;
   }
+  // Optional synthetic-headers pass — append in-memory shim files for
+  // headers we want to ship that don't exist on disk in the source
+  // sysroot (e.g. per-subsystem umbrellas the consolidated Multiverse.h
+  // approach drops). Skip any path already present from the on-disk
+  // walk so a real header always wins over a shim.
+  let synthCount = 0;
+  if (synthetic) {
+    for (const [rel, content] of Object.entries(synthetic)) {
+      if (existingPaths.has(rel)) continue;
+      const bytes = Buffer.from(content, "utf8");
+      indexEntries.push({ p: rel, o: offset, l: bytes.length });
+      existingPaths.add(rel);
+      chunks.push(bytes);
+      offset += bytes.length;
+      synthCount++;
+    }
+  }
   // Second pass — emit case-fold aliases for any entry whose lowercase
   // path isn't already represented. Same {o,l} as the original.
   let aliasCount = 0;
@@ -336,7 +399,7 @@ function packBlob(blobName, indexName, options) {
   writeFileSync(join(OUT_DIR, blobName), blob);
   writeFileSync(join(OUT_DIR, indexName), JSON.stringify(indexEntries));
   console.log(
-    `[bundle] ${blobName.padEnd(22)} ${blob.length} B across ${indexEntries.length} files (${aliasCount} case-fold aliases)`,
+    `[bundle] ${blobName.padEnd(22)} ${blob.length} B across ${indexEntries.length} files (${aliasCount} case-fold aliases${synthCount ? `, ${synthCount} synthetic shims` : ""})`,
   );
   console.log(
     `[bundle] ${indexName.padEnd(22)} ${statSync(join(OUT_DIR, indexName)).size} B`,
@@ -348,6 +411,7 @@ function packBlob(blobName, indexName, options) {
 const headers = packBlob("sysroot.bin", "sysroot.index.json", {
   subtrees: HEADER_SUBTREES,
   keepEntry: (rel) => !HEADER_EXCLUDE_PREFIXES.some((p) => rel.startsWith(p)),
+  synthetic: SYNTHETIC_HEADERS,
 });
 
 // 2b. Library + ld-script blob — what Build .c fetches in addition.
