@@ -2725,3 +2725,93 @@ Linker map confirms `.text._start` at `0x00000d0e`, well inside
    Emscripten Module — the `-Map` path is inside the Module's MEMFS,
    not the host's `/tmp`. A stale host-side map silently misled a
    round of diagnosis on this exact bug.
+
+## 2026-05-16 — Things learned shipping the live demo + cross-tab handoff
+
+### The "fake Apple logo" lesson
+
+**Context.** When we reskinned the live demo to evoke apple.com circa
+July 1997, we drew an inline SVG rainbow apple silhouette as a tribute.
+The hand-rolled silhouette was 36 px tall in the hero, and at that
+size the asymmetric shoulders, the missing leaf-vs-body contrast, and
+the chunky bite read as "vaguely apple-shaped" rather than the iconic
+Janoff mark. Two attempts at cleaner SVG paths got closer but never
+fully there.
+
+**Resolution.** Drop it. "Welcome to wasm-retro-cc" in italic Times
+reads cleanly without a logo. A wonky tribute looks worse than no
+tribute.
+
+**General rule.** A reproduction of a well-known visual reference is
+held to the original's standard, not the standard of "did you put
+effort in." If you can't match it, omit it — the alternative is
+signalling that the rest of your work has the same problem.
+
+### The Node CLI was 200 lines and unlocked CI
+
+**Context.** A standing complaint in cv-mac was that the wasm-shelf
+samples have no automation — they're only tested by humans clicking
+Build. A 3-second `audit-by-compiling-all-21-samples` script would
+close that loop, but the toolchain only had a browser entry-point
+(`web-demo/compile.mjs` and cv-mac's `cc1.ts`), both using `fetch()`
+and dynamic-`import()` against relative URLs.
+
+**Resolution.** `scripts/compile-c-cli.mjs` — same pipeline structure
+as the browser driver, with `fs.read` swapped in for `fetch`. ~200 LOC
+plus the discovery that Emscripten's `locateFile` override is the
+cleanest way to point the wasm loader at a non-relative bundle path.
+cv-mac then built `audit-wasm-samples.mjs` on top of the same shape;
+new CI job catches sample regressions on every PR.
+
+**General rule.** When you have a working browser-only driver and
+want a Node version, the platform difference is almost always just
+fetch ↔ fs and relative-URL resolution ↔ absolute paths. The pipeline
+logic ports as-is. Don't refactor the browser side defensively
+"in case we ever want Node" — wait, port when you actually want it.
+
+### Synthetic umbrella headers > re-extracting the sysroot
+
+**Context.** Several Retro68 umbrella headers (`Controls.h`, `Lists.h`,
+`Scrap.h`, `Aliases.h`, `Palettes.h`, `QDOffscreen.h`) exist as
+standalone files in the native Retro68 install but not in our wasm
+sysroot — the consolidated `Multiverse.h` carries all the prototypes,
+and the per-subsystem umbrellas were dropped during the bundle
+extraction. Users hit `fatal error: Controls.h: No such file or
+directory` the moment they reached for an explicit include.
+
+**Resolution.** `scripts/build-show-asm-bundle.mjs` now synthesises a
+shim file per missing umbrella — each one is a 6-line
+`#include <Multiverse.h>` re-export. Six shims, ~1.5 KB added to the
+headers blob (negligible against the existing 1.1 MB payload).
+On-disk files always win if they exist, so a future SDK that ships
+the real umbrellas won't conflict.
+
+**General rule.** Don't make consumers contort around your bundle's
+shape when a tiny synthetic shim is free. Shims age fine; documented
+"we don't ship that, use this instead" requires every consumer to
+read your docs (most won't).
+
+### package.json said one thing, reality said another, audit caught both
+
+**Context.** A cross-repo audit (cv-mac #195's twin in this repo,
+filed as #34) caught three real bugs in `package.json` plus matching
+doc drift. `"license": "MIT"` was declared but no LICENSE file ever
+shipped; `"main": "dist/retro-cc.js"` pointed at an artifact that was
+never produced (real outputs live under `dist/show-asm/`); the `test`
+script ran `node test/run.mjs` against a `test/` directory that
+doesn't exist. README repeated some of the same fictions.
+
+**Resolution.** `"license": "SEE LICENSE IN README.md"` (the README
+section that actually exists), dropped the bogus `main`/`files`/test
+script, marked the package `"private": true` so `npm publish` can't
+fire accidentally, added the scripts that do exist + work from a
+fresh clone. README rewrote its "Reusing the toolchain" section to
+match the actual distribution model (vendor artifact files; there is
+no `npm install` of this package).
+
+**General rule.** Once a manifest has lied, it'll keep lying — anyone
+who reads it trusts the manifest over a footnote in the README. An
+honest "SEE LICENSE IN README.md" + `private: true` is much better
+than a placeholder you'll forget to fix. And: file-format / manifest
+audits are exactly the kind of thing a fresh-eyes external reviewer
+catches that the original author has stopped seeing.
