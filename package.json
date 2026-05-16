@@ -1,23 +1,23 @@
 {
   "name": "wasm-retro-cc",
   "version": "0.1.0",
-  "description": "C compiler for classic Macintosh 68k, compiled to WebAssembly",
-  "keywords": ["macintosh", "68k", "wasm", "compiler", "retro"],
-  "license": "MIT",
+  "description": "A WebAssembly build of the Retro68 toolchain (cc1 + as + ld + Elf2Mac). Compiles C source into a classic Macintosh 68k MacBinary II app, in-browser. Distributed as vendored artifact files (see CONTRIBUTING.md), not currently published to npm.",
+  "keywords": ["macintosh", "68k", "wasm", "compiler", "retro", "retro68"],
+  "license": "SEE LICENSE IN README.md",
+  "private": true,
+  "homepage": "https://khawkins98.github.io/wasm-retro-cc/",
   "repository": {
     "type": "git",
-    "url": "https://github.com/khawkins98/wasm-retro-cc"
+    "url": "https://github.com/khawkins98/wasm-retro-cc.git"
+  },
+  "bugs": {
+    "url": "https://github.com/khawkins98/wasm-retro-cc/issues"
   },
   "type": "module",
-  "main": "dist/retro-cc.js",
-  "files": [
-    "dist/retro-cc.js",
-    "dist/retro-cc.wasm"
-  ],
   "scripts": {
-    "build": "emcmake cmake -B build -DCMAKE_BUILD_TYPE=Release && emmake cmake --build build",
-    "test": "node test/run.mjs",
-    "clean": "rm -rf build dist"
+    "bundle": "node scripts/build-show-asm-bundle.mjs",
+    "vendor:web-demo": "node scripts/vendor-into-web-demo.mjs",
+    "snapshot:og-card": "node scripts/snapshot-og-card.mjs"
   },
   "engines": {
     "node": ">=18"
