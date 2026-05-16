@@ -25,6 +25,46 @@
     header p { margin: 0; color: var(--muted); max-width: 720px; }
     header p a { color: var(--accent); }
     main { max-width: 1200px; margin: 0 auto; padding: 12px 28px 40px; }
+
+    /* ELI10 / credits disclosure — collapsed by default so the page
+       stays calm; expanded gives the long-form explanation + credits
+       to Retro68 / GCC / binutils / Emscripten. */
+    .eli10 {
+      margin: 14px 0 0;
+      max-width: 720px;
+      border: 1px solid var(--pane-border);
+      border-radius: 6px;
+      background: var(--pane);
+    }
+    .eli10 summary {
+      cursor: pointer;
+      padding: 10px 14px;
+      font-weight: 600;
+      color: var(--ink);
+      user-select: none;
+    }
+    .eli10 summary:hover { color: var(--accent); }
+    .eli10[open] summary {
+      border-bottom: 1px solid var(--pane-border);
+    }
+    .eli10__body {
+      padding: 8px 18px 16px;
+      color: var(--ink);
+    }
+    .eli10__body p,
+    .eli10__body ol,
+    .eli10__body ul {
+      margin: 8px 0;
+      color: var(--ink);
+    }
+    .eli10__body a { color: var(--accent); }
+    .eli10__body h3 {
+      margin: 18px 0 4px;
+      font-size: 14px;
+    }
+    .eli10__body strong { color: var(--ink); }
+    .eli10__body em { color: var(--muted); font-style: italic; }
+    .eli10__body code { font-family: var(--mono); font-size: 0.92em; }
     .toolbar {
       display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
       padding: 12px 0;
@@ -82,14 +122,110 @@
   <p>
     A WebAssembly toolchain that compiles C source into a classic
     Macintosh 68k MacBinary II APPL — <strong>entirely in your browser</strong>.
-    cc1 + as + ld + Elf2Mac, ~3.9&nbsp;MB brotli total. Click
-    <em>Compile</em> below to run the full pipeline on the bundled
-    <code>hello.c</code>, then download the <code>.bin</code> and drop
-    it into any classic Mac emulator. Source on
+    Click <em>Compile</em> below to run the full pipeline on the
+    bundled <code>hello.c</code>, then download the <code>.bin</code>
+    and drop it into any classic Mac emulator. Source on
     <a href="https://github.com/khawkins98/wasm-retro-cc">GitHub</a> —
     a fuller editor lives at
     <a href="https://khawkins98.github.io/classic-vibe-mac/">classic-vibe-mac</a>.
   </p>
+
+  <details class="eli10">
+    <summary>Wait — what's actually happening here? (explain it like I'm 10)</summary>
+    <div class="eli10__body">
+      <p>
+        A "compiler" is a program that turns C code (what a programmer
+        writes) into a real, runnable app. Normally, the compiler for
+        old Macintosh apps only runs on a Mac. Even the modern ports
+        only run on a Linux or macOS machine with a complicated setup.
+      </p>
+      <p>
+        What this page does: we took that compiler — actually
+        <em>four</em> programs that work together — and we squished each
+        of them down small enough to run <strong>inside a web page</strong>.
+        Your browser is doing the same job a 1990s SE/30 with the
+        right developer disks could do, except the developer disks
+        weigh ~4&nbsp;MB and arrive over the internet in a couple of
+        seconds.
+      </p>
+      <p>
+        When you press <em>Compile</em>, the page runs your C source
+        through this chain, all in your tab:
+      </p>
+      <ol>
+        <li><strong>cc1</strong> — the C compiler from
+            <a href="https://gcc.gnu.org/">GCC</a> — turns your C into
+            assembly language for the Motorola 68000 chip a real
+            classic Mac uses.</li>
+        <li><strong>as</strong> — the assembler from
+            <a href="https://www.gnu.org/software/binutils/">GNU binutils</a> —
+            turns assembly into machine code (an ELF object file).</li>
+        <li><strong>ld</strong> — the linker, also from GNU binutils —
+            stitches your object together with the classic Mac runtime
+            so it becomes a complete program.</li>
+        <li><strong>Elf2Mac</strong> — the file-format converter from
+            Retro68 — repackages the result as a
+            <em>MacBinary&nbsp;II</em> file, the wrapper a real Macintosh
+            from 1989 knows how to launch.</li>
+      </ol>
+      <p>
+        The <code>.bin</code> you download is bit-for-bit the same kind
+        of file you'd have gotten on a floppy in 1989 — drop it into
+        any classic Mac emulator (Basilisk II, Mini vMac, SheepShaver,
+        an actual old Mac) and it boots.
+      </p>
+
+      <h3>Who built the original compiler we packed into the browser?</h3>
+      <p>
+        Almost none of the heavy lifting in this project is ours.
+        Massive credit to:
+      </p>
+      <ul>
+        <li>
+          <strong><a href="https://github.com/autc04/Retro68">Retro68</a></strong>
+          — Wolfgang Thaller's open-source modern cross-compiler
+          toolchain for classic 68k Macs. Retro68 is what made it
+          even possible to compile C for 1989 Macs from a 2020s
+          computer; we just re-wrapped it for the browser. The
+          <code>Elf2Mac</code> step is Retro68's, and the GCC + binutils
+          builds we ship are configured against Retro68's patches and
+          Universal&nbsp;Headers.
+        </li>
+        <li>
+          <strong><a href="https://gcc.gnu.org/">GCC</a></strong> — the
+          GNU Compiler Collection. <code>cc1</code> here is GCC's C
+          frontend, configured to emit m68k assembly.
+        </li>
+        <li>
+          <strong><a href="https://www.gnu.org/software/binutils/">GNU&nbsp;binutils</a></strong>
+          — the assembler (<code>as</code>) and linker (<code>ld</code>)
+          come from here.
+        </li>
+        <li>
+          <strong><a href="https://emscripten.org/">Emscripten</a></strong>
+          — the tool that compiled the four C/C++ programs above into
+          the WebAssembly modules running in your browser tab right now.
+        </li>
+        <li>
+          <strong><a href="https://github.com/autc04/Universal-Headers">Apple's
+          original Universal Headers</a></strong> (the System 7-era
+          Toolbox API declarations) — included via Retro68 so
+          <code>#include &lt;Windows.h&gt;</code> resolves to the same
+          definitions an 1990s Mac developer would have used.
+        </li>
+      </ul>
+      <p>
+        What's ours: glue. The four-step in-browser pipeline driver
+        (<a href="./compile.mjs">compile.mjs</a>), the bundle packaging
+        script that ships the sysroot as a single blob plus index, and
+        the synthetic umbrella-header shims that smooth over the few
+        spots the in-browser sysroot diverges from a native Retro68
+        install. Compared to the toolchains and 30 years of platform
+        work above, our contribution is small but specific: <em>the
+        thing that lets all of it run in a web tab</em>.
+      </p>
+    </div>
+  </details>
 </header>
 
 <main>
