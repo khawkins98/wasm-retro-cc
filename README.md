@@ -87,11 +87,26 @@ can compile C source code targeting `m68k-apple-macos` entirely in a
 browser tab, returning a valid MacBinary II APPL. No backend, no
 GitHub Actions detour, no local toolchain install.
 
+## Live demo
+
+**[khawkins98.github.io/wasm-retro-cc](https://khawkins98.github.io/wasm-retro-cc/)** —
+edit a tiny Toolbox `hello.c`, click Compile, see the m68k assembly +
+hex-dumped MacBinary II, download the `.bin`. Runs the full
+cc1 → as → ld → Elf2Mac pipeline in your browser; no install, no
+build step, no emulator required. Source under
+[`web-demo/`](./web-demo/).
+
+For the full editor + emulator experience (System 7.5.5 boots, your
+build hot-loads, multi-file projects, optimisation levels, etc.) see
+the sibling [`classic-vibe-mac`](https://khawkins98.github.io/classic-vibe-mac/)
+playground.
+
 ## Two-repo project
 
-This repo is **toolchain-only**. The interactive playground that
-consumes it — editor, in-browser emulator, demo apps, hot-load flow —
-lives in **[`classic-vibe-mac`](https://github.com/khawkins98/classic-vibe-mac)**.
+This repo is **toolchain-only** (plus the minimal `web-demo/` proof of
+life). The interactive playground that consumes it — editor,
+in-browser emulator, demo apps, hot-load flow — lives in
+**[`classic-vibe-mac`](https://github.com/khawkins98/classic-vibe-mac)**.
 
 If you found this repo *via* `classic-vibe-mac`, the toolchain you
 care about is the four `.wasm`/`.mjs` files under `dist/show-asm/`

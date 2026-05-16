@@ -1,0 +1,43 @@
+name: Deploy web-demo to GitHub Pages
+
+# Serves the static web-demo/ as a live "compile classic Mac C in a tab"
+# page so anyone can prove the toolchain works without first standing up
+# classic-vibe-mac. The bundle bytes under web-demo/wasm-cc1/ are
+# committed (refreshed by scripts/vendor-into-web-demo.mjs), so this
+# workflow is pure copy + upload — no Emscripten, no build, no toolchain
+# install.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web-demo/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web-demo
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
