@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>wasm-retro-cc — compile classic Mac C in your browser</title>
+  <meta name="description" content="A reusable WebAssembly toolchain that compiles C source into a classic Macintosh 68k MacBinary II APPL — entirely in the browser. Live demo." />
+  <style>
+    :root {
+      --bg: #f5f3ef;
+      --ink: #1d1d1f;
+      --muted: #6e6e73;
+      --accent: #0066cc;
+      --pane: #ffffff;
+      --pane-border: #d2d2d7;
+      --warn: #b45309;
+      --err: #b91c1c;
+      --ok: #047857;
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+    header { padding: 24px 28px 12px; max-width: 1200px; margin: 0 auto; }
+    header h1 { margin: 0 0 6px; font-size: 22px; letter-spacing: -0.01em; }
+    header p { margin: 0; color: var(--muted); max-width: 720px; }
+    header p a { color: var(--accent); }
+    main { max-width: 1200px; margin: 0 auto; padding: 12px 28px 40px; }
+    .toolbar {
+      display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+      padding: 12px 0;
+    }
+    button {
+      font: inherit;
+      background: var(--ink); color: white; border: 0; border-radius: 6px;
+      padding: 8px 14px; cursor: pointer;
+    }
+    button.secondary { background: var(--pane); color: var(--ink); border: 1px solid var(--pane-border); }
+    button:disabled { opacity: 0.5; cursor: progress; }
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      grid-template-rows: minmax(220px, 360px) minmax(200px, 320px);
+      gap: 14px;
+    }
+    .pane {
+      background: var(--pane); border: 1px solid var(--pane-border);
+      border-radius: 8px; overflow: hidden;
+      display: flex; flex-direction: column; min-width: 0;
+    }
+    .pane h2 {
+      margin: 0; padding: 8px 12px; font-size: 12px; font-weight: 600;
+      letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted);
+      background: #fafaf7; border-bottom: 1px solid var(--pane-border);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .pane h2 .meta { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted); }
+    .pane textarea, .pane pre {
+      flex: 1; margin: 0; padding: 12px;
+      font: 12.5px/1.5 var(--mono);
+      background: transparent; color: var(--ink);
+      border: 0; outline: 0; resize: none; overflow: auto;
+      white-space: pre; tab-size: 4;
+    }
+    .pane textarea { font-size: 13px; }
+    #log { font: 12px/1.5 var(--mono); }
+    #log .ok { color: var(--ok); }
+    #log .warn { color: var(--warn); }
+    #log .err { color: var(--err); font-weight: 600; }
+    #log div { padding: 1px 0; }
+    .hexpane { grid-column: span 1; }
+    .empty { color: var(--muted); padding: 12px; font-style: italic; }
+    footer { padding: 16px 28px 28px; max-width: 1200px; margin: 0 auto; color: var(--muted); font-size: 13px; }
+    footer a { color: var(--accent); }
+    @media (max-width: 760px) {
+      .grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <h1>wasm-retro-cc</h1>
+  <p>
+    A WebAssembly toolchain that compiles C source into a classic
+    Macintosh 68k MacBinary II APPL — <strong>entirely in your browser</strong>.
+    cc1 + as + ld + Elf2Mac, ~3.9&nbsp;MB brotli total. Click
+    <em>Compile</em> below to run the full pipeline on the bundled
+    <code>hello.c</code>, then download the <code>.bin</code> and drop
+    it into any classic Mac emulator. Source on
+    <a href="https://github.com/khawkins98/wasm-retro-cc">GitHub</a> —
+    a fuller editor lives at
+    <a href="https://khawkins98.github.io/classic-vibe-mac/">classic-vibe-mac</a>.
+  </p>
+</header>
+
+<main>
+  <div class="toolbar">
+    <button id="compile-btn">Compile</button>
+    <button id="download-btn" class="secondary" disabled>Download .bin</button>
+    <button id="reset-btn" class="secondary">Reset source</button>
+    <span id="status" style="color: var(--muted);">Ready.</span>
+  </div>
+
+  <div class="grid">
+    <section class="pane">
+      <h2>hello.c <span class="meta">edit me, then hit Compile</span></h2>
+      <textarea id="src" spellcheck="false"></textarea>
+    </section>
+
+    <section class="pane">
+      <h2>m68k assembly <span class="meta">from cc1</span></h2>
+      <pre id="asm" class="empty">(no output yet)</pre>
+    </section>
+
+    <section class="pane">
+      <h2>MacBinary II hex preview <span class="meta">first 256 bytes from Elf2Mac</span></h2>
+      <pre id="hex" class="empty">(no output yet)</pre>
+    </section>
+
+    <section class="pane">
+      <h2>Build log <span class="meta">stage timings + stderr</span></h2>
+      <pre id="log" class="empty">(idle)</pre>
+    </section>
+  </div>
+</main>
+
+<footer>
+  Output is a single-fork MacBinary II APPL. To run it: open
+  <a href="https://khawkins98.github.io/classic-vibe-mac/">classic-vibe-mac</a>
+  for an instant in-tab BasiliskII, or import the <code>.bin</code> into
+  Mini vMac / SheepShaver / a real 68k machine. Toolchain details in the
+  <a href="https://github.com/khawkins98/wasm-retro-cc#readme">README</a>;
+  build pipeline walk-through in
+  <a href="https://github.com/khawkins98/wasm-retro-cc/blob/main/LEARNINGS.md">LEARNINGS.md</a>.
+</footer>
+
+<script type="module">
+  import { compile } from "./compile.mjs";
+
+  const srcEl = document.getElementById("src");
+  const asmEl = document.getElementById("asm");
+  const hexEl = document.getElementById("hex");
+  const statusEl = document.getElementById("status");
+  const compileBtn = document.getElementById("compile-btn");
+  const downloadBtn = document.getElementById("download-btn");
+  const resetBtn = document.getElementById("reset-btn");
+
+  // Load the bundled hello.c once. We use fetch instead of inlining so
+  // the same canonical sample also lives on disk for anyone browsing
+  // the repo — single source of truth.
+  let pristineSource = "";
+  const initial = await fetch("./hello.c").then((r) => r.text());
+  pristineSource = initial;
+  srcEl.value = initial;
+
+  let lastBin = null;
+
+  function setEmpty(el, text) { el.textContent = text; el.classList.add("empty"); }
+  function setFilled(el, text) { el.textContent = text; el.classList.remove("empty"); }
+
+  function hexDump(bytes, max = 256) {
+    const n = Math.min(bytes.length, max);
+    const lines = [];
+    for (let i = 0; i < n; i += 16) {
+      const slice = bytes.subarray(i, Math.min(i + 16, n));
+      const hex = Array.from(slice, (b) => b.toString(16).padStart(2, "0")).join(" ");
+      const ascii = Array.from(slice, (b) => (b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : ".")).join("");
+      lines.push(`${i.toString(16).padStart(4, "0")}:  ${hex.padEnd(48, " ")}  ${ascii}`);
+    }
+    if (bytes.length > max) lines.push(`… (${bytes.length - max} more bytes)`);
+    return lines.join("\n");
+  }
+
+  compileBtn.addEventListener("click", async () => {
+    compileBtn.disabled = true;
+    downloadBtn.disabled = true;
+    lastBin = null;
+    statusEl.textContent = "Compiling…";
+    setEmpty(asmEl, "(compiling…)");
+    setEmpty(hexEl, "(compiling…)");
+    try {
+      const result = await compile(srcEl.value, "hello.c");
+      if (result.asm) setFilled(asmEl, result.asm);
+      else setEmpty(asmEl, "(no assembly produced)");
+      if (result.ok && result.bin) {
+        lastBin = result.bin;
+        setFilled(hexEl, hexDump(result.bin));
+        downloadBtn.disabled = false;
+        statusEl.textContent = `Success — ${result.bin.length}-byte MacBinary II APPL.`;
+      } else {
+        setEmpty(hexEl, "(no binary — compile failed)");
+        statusEl.textContent = "Compile failed. See Build log for details.";
+      }
+    } catch (e) {
+      statusEl.textContent = "Unexpected error: " + (e?.message ?? e);
+      console.error(e);
+    } finally {
+      compileBtn.disabled = false;
+    }
+  });
+
+  downloadBtn.addEventListener("click", () => {
+    if (!lastBin) return;
+    const blob = new Blob([lastBin], { type: "application/macbinary" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "hello.bin";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  });
+
+  resetBtn.addEventListener("click", () => {
+    srcEl.value = pristineSource;
+    statusEl.textContent = "Source restored.";
+  });
+</script>
+</body>
+</html>
