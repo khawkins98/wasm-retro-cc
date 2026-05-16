@@ -17,7 +17,8 @@
   "scripts": {
     "bundle": "node scripts/build-show-asm-bundle.mjs",
     "vendor:web-demo": "node scripts/vendor-into-web-demo.mjs",
-    "snapshot:og-card": "node scripts/snapshot-og-card.mjs"
+    "snapshot:og-card": "node scripts/snapshot-og-card.mjs",
+    "compile-c": "node scripts/compile-c-cli.mjs"
   },
   "engines": {
     "node": ">=18"
