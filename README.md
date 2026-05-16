@@ -128,6 +128,21 @@ from a C source string. The classic-vibe-mac side does the same
 in [`src/web/src/playground/cc1.ts`](https://github.com/khawkins98/classic-vibe-mac/blob/main/src/web/src/playground/cc1.ts)
 with multi-file C and per-stage diagnostics added on.
 
+Or skip the browser and drive the pipeline straight from Node:
+
+```sh
+npm run bundle                    # builds dist/show-asm/ (one-time, slow)
+npm run compile-c -- hello.c -o hello.bin
+```
+
+[`scripts/compile-c-cli.mjs`](./scripts/compile-c-cli.mjs) runs
+the same cc1 → as → ld → Elf2Mac pipeline, reading the wasm
+modules + sysroot blobs from disk. Useful for CI smoke tests or
+shell-script integrations that don't want a headless browser in
+the loop. (The Musashi 68k harness for actually *running* the
+resulting binary headless is tracked in
+[classic-vibe-mac #89](https://github.com/khawkins98/classic-vibe-mac/issues/89).)
+
 Plausible non-cv-mac uses:
 
 - A retro-Mac-C tutorial site that compiles user code in-browser
