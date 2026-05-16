@@ -131,26 +131,19 @@
   </p>
 
   <details class="eli10">
-    <summary>Wait — what's actually happening here? (explain it like I'm 10)</summary>
+    <summary>What's actually happening here?</summary>
     <div class="eli10__body">
       <p>
-        A "compiler" is a program that turns C code (what a programmer
-        writes) into a real, runnable app. Normally, the compiler for
-        old Macintosh apps only runs on a Mac. Even the modern ports
-        only run on a Linux or macOS machine with a complicated setup.
+        A "compiler" is a program that turns C source code into a real,
+        runnable app. Normally, the compiler for old Macintosh apps only
+        runs on a Mac — or, more recently, on a Linux/macOS machine with
+        a non-trivial cross-toolchain installed.
       </p>
       <p>
-        What this page does: we took that compiler — actually
-        <em>four</em> programs that work together — and we squished each
-        of them down small enough to run <strong>inside a web page</strong>.
-        Your browser is doing the same job a 1990s SE/30 with the
-        right developer disks could do, except the developer disks
-        weigh ~4&nbsp;MB and arrive over the internet in a couple of
-        seconds.
-      </p>
-      <p>
-        When you press <em>Compile</em>, the page runs your C source
-        through this chain, all in your tab:
+        What this page does: takes that compiler — actually
+        <em>four</em> programs that work together — and runs each of
+        them <strong>inside a web page</strong>. Press <em>Compile</em>
+        and your C source goes through this chain, all in your tab:
       </p>
       <ol>
         <li><strong>cc1</strong> — the C compiler from
@@ -164,32 +157,31 @@
             stitches your object together with the classic Mac runtime
             so it becomes a complete program.</li>
         <li><strong>Elf2Mac</strong> — the file-format converter from
-            Retro68 — repackages the result as a
-            <em>MacBinary&nbsp;II</em> file, the wrapper a real Macintosh
-            from 1989 knows how to launch.</li>
+            <a href="https://github.com/autc04/Retro68">Retro68</a> —
+            repackages the result as a <em>MacBinary&nbsp;II</em> file,
+            the wrapper a real Macintosh from 1989 knows how to launch.</li>
       </ol>
       <p>
         The <code>.bin</code> you download is bit-for-bit the same kind
         of file you'd have gotten on a floppy in 1989 — drop it into
-        any classic Mac emulator (Basilisk II, Mini vMac, SheepShaver,
-        an actual old Mac) and it boots.
+        any classic Mac emulator (Basilisk&nbsp;II, Mini&nbsp;vMac,
+        SheepShaver, an actual old Mac) and it boots.
       </p>
 
-      <h3>Who built the original compiler we packed into the browser?</h3>
+      <h3>Credit where credit is due</h3>
       <p>
-        Almost none of the heavy lifting in this project is ours.
-        Massive credit to:
+        Almost none of the heavy lifting is ours — the toolchains above
+        represent decades of work by other people:
       </p>
       <ul>
         <li>
           <strong><a href="https://github.com/autc04/Retro68">Retro68</a></strong>
           — Wolfgang Thaller's open-source modern cross-compiler
-          toolchain for classic 68k Macs. Retro68 is what made it
-          even possible to compile C for 1989 Macs from a 2020s
-          computer; we just re-wrapped it for the browser. The
-          <code>Elf2Mac</code> step is Retro68's, and the GCC + binutils
-          builds we ship are configured against Retro68's patches and
-          Universal&nbsp;Headers.
+          toolchain for classic 68k Macs. Retro68 is what makes
+          compiling C for 1989 Macs from a 2020s computer possible at
+          all; we just re-wrap it for the browser. <code>Elf2Mac</code>
+          is Retro68's, and our GCC + binutils builds are configured
+          against Retro68's patches and Universal&nbsp;Headers.
         </li>
         <li>
           <strong><a href="https://gcc.gnu.org/">GCC</a></strong> — the
@@ -198,31 +190,74 @@
         </li>
         <li>
           <strong><a href="https://www.gnu.org/software/binutils/">GNU&nbsp;binutils</a></strong>
-          — the assembler (<code>as</code>) and linker (<code>ld</code>)
-          come from here.
+          — the assembler (<code>as</code>) and linker (<code>ld</code>).
         </li>
         <li>
           <strong><a href="https://emscripten.org/">Emscripten</a></strong>
-          — the tool that compiled the four C/C++ programs above into
-          the WebAssembly modules running in your browser tab right now.
+          — what compiled the four C/C++ programs above into the
+          WebAssembly modules running in your tab right now.
         </li>
         <li>
           <strong><a href="https://github.com/autc04/Universal-Headers">Apple's
-          original Universal Headers</a></strong> (the System 7-era
-          Toolbox API declarations) — included via Retro68 so
+          Universal&nbsp;Headers</a></strong> (the System 7-era Toolbox
+          API declarations) — included via Retro68 so
           <code>#include &lt;Windows.h&gt;</code> resolves to the same
-          definitions an 1990s Mac developer would have used.
+          definitions a 1990s Mac developer would have used.
         </li>
       </ul>
+
+      <h3>So what's unique about <em>this</em> project?</h3>
       <p>
-        What's ours: glue. The four-step in-browser pipeline driver
-        (<a href="./compile.mjs">compile.mjs</a>), the bundle packaging
-        script that ships the sysroot as a single blob plus index, and
-        the synthetic umbrella-header shims that smooth over the few
-        spots the in-browser sysroot diverges from a native Retro68
-        install. Compared to the toolchains and 30 years of platform
-        work above, our contribution is small but specific: <em>the
-        thing that lets all of it run in a web tab</em>.
+        The <strong>glue</strong>, and the <strong>pipeline that brings
+        it all together in a browser tab</strong>. Concretely:
+      </p>
+      <ul>
+        <li>
+          A four-stage in-browser driver
+          (<a href="./compile.mjs">compile.mjs</a>) that wires the four
+          wasm tools into a single C-source-in / MacBinary-out call.
+        </li>
+        <li>
+          A bundle-packaging script that ships the Retro68 sysroot as a
+          single brotli-friendly blob plus a JSON index — so the
+          browser fetches one 1.1&nbsp;MB blob instead of 220
+          individual header files.
+        </li>
+        <li>
+          Synthetic umbrella-header shims (<code>Controls.h</code>,
+          <code>Lists.h</code>, <code>Scrap.h</code>,
+          <code>QDOffscreen.h</code>, …) so the in-browser sysroot
+          behaves the same as a native Retro68 install for the headers
+          a typical Mac C program reaches for.
+        </li>
+        <li>
+          Workarounds for the dozens of bugs that turned up along the
+          way — wasm trap inputs, ld archive-scan ordering, missing
+          relocation records, the SIZE-resource-required-for-startup
+          fault, and others. The full play-by-play of getting four
+          mid-1990s native tools to cooperate in a sandboxed JavaScript
+          engine is in
+          <strong><a href="https://github.com/khawkins98/wasm-retro-cc/blob/main/LEARNINGS.md">LEARNINGS.md</a></strong>
+          — start with the dated entries at the bottom for the most
+          recent fixes.
+        </li>
+      </ul>
+
+      <h3>What can you do with it?</h3>
+      <p>
+        <strong>Compile basic Macintosh programs in pure JavaScript</strong>
+        — no server, no Docker, no toolchain install. The Compile
+        button below is the smallest demonstration:
+        <code>hello.c</code> → <code>.bin</code> → drop into any
+        classic Mac emulator.
+      </p>
+      <p>
+        For fuller-featured examples — a System 7 desktop running in
+        your browser, 21 editable sample apps, hot-load-on-build, an
+        in-tab editor with Find/Replace and build diagnostics — see
+        the sibling
+        <strong><a href="https://khawkins98.github.io/classic-vibe-mac/">classic-vibe-mac</a></strong>
+        playground. Same toolchain, more chrome around it.
       </p>
     </div>
   </details>
@@ -232,6 +267,10 @@
   <div class="toolbar">
     <button id="compile-btn">Compile</button>
     <button id="download-btn" class="secondary" disabled>Download .bin</button>
+    <button id="run-cvmac-btn" class="secondary" disabled
+            title="Open this source in the classic-vibe-mac playground (System 7 boots, your code hot-loads)">
+      Run in classic-vibe-mac&nbsp;↗
+    </button>
     <button id="reset-btn" class="secondary">Reset source</button>
     <span id="status" style="color: var(--muted);">Ready.</span>
   </div>
@@ -278,7 +317,13 @@
   const statusEl = document.getElementById("status");
   const compileBtn = document.getElementById("compile-btn");
   const downloadBtn = document.getElementById("download-btn");
+  const runCvmacBtn = document.getElementById("run-cvmac-btn");
   const resetBtn = document.getElementById("reset-btn");
+
+  // Where classic-vibe-mac lives. The handoff URL fragment is
+  // `#cvm-import-source=<base64-encoded-utf8>`; the cv-mac side picks
+  // this up at boot and pre-fills its editor with the source.
+  const CVMAC_URL = "https://khawkins98.github.io/classic-vibe-mac/";
 
   // Load the bundled hello.c once. We use fetch instead of inlining so
   // the same canonical sample also lives on disk for anyone browsing
@@ -309,6 +354,7 @@
   compileBtn.addEventListener("click", async () => {
     compileBtn.disabled = true;
     downloadBtn.disabled = true;
+    runCvmacBtn.disabled = true;
     lastBin = null;
     statusEl.textContent = "Compiling…";
     setEmpty(asmEl, "(compiling…)");
@@ -321,6 +367,7 @@
         lastBin = result.bin;
         setFilled(hexEl, hexDump(result.bin));
         downloadBtn.disabled = false;
+        runCvmacBtn.disabled = false;
         statusEl.textContent = `Success — ${result.bin.length}-byte MacBinary II APPL.`;
       } else {
         setEmpty(hexEl, "(no binary — compile failed)");
@@ -332,6 +379,28 @@
     } finally {
       compileBtn.disabled = false;
     }
+  });
+
+  // Run-in-cv-mac: pack the current source into a URL fragment and
+  // open the cv-mac playground in a new tab. cv-mac's main.ts watches
+  // location.hash for `cvm-import-source=<base64>` at boot and pre-fills
+  // its editor + offers a one-click "Build & Run" against System 7.
+  //
+  // Fragment (not query string) on purpose:
+  //   - GitHub Pages strips/normalises query strings differently for
+  //     subpaths; the fragment is preserved verbatim by every browser.
+  //   - Fragment never reaches the server, so the user's source never
+  //     leaves their device.
+  runCvmacBtn.addEventListener("click", () => {
+    const src = srcEl.value;
+    // btoa() doesn't handle UTF-8 directly; round-trip through
+    // TextEncoder + base64url-safe chars so the fragment stays clean.
+    const bytes = new TextEncoder().encode(src);
+    let bin = "";
+    for (const b of bytes) bin += String.fromCharCode(b);
+    const b64 = btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const url = `${CVMAC_URL}#cvm-import-source=${b64}`;
+    window.open(url, "_blank", "noopener,noreferrer");
   });
 
   downloadBtn.addEventListener("click", () => {
