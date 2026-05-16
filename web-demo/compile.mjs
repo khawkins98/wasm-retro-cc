@@ -128,9 +128,27 @@ export async function compile(source, sourceName = "hello.c") {
   const t0 = performance.now();
   const baseNoExt = sourceName.replace(/\.c$/i, "");
 
+  // Per-stage timing accumulators. Each stage has two phases:
+  //   `fetch` — fetch the .mjs/.wasm + Emscripten Module init + (optional)
+  //             sysroot mount. On a cold tab this dominates: cc1.wasm is
+  //             3.3 MB brotli and has to download + instantiate.
+  //   `run`   — the actual callMain() that does the compiling.
+  // Showing them split makes "the page took 4 s but the compiler only ran
+  // for 50 ms" comprehensible at a glance.
+  const t = {
+    cc1Fetch: 0, cc1Run: 0,
+    asFetch:  0, asRun:  0,
+    ldFetch:  0, ldRun:  0,
+    e2mFetch: 0, e2mRun: 0,
+  };
+  const fmt = (ms) => `${Math.round(ms)}ms`;
+  const isWarm = blobCache.has("sysroot.bin");  // 2nd+ compile in this tab
+
   // 1. cc1 — C → m68k .s
   log("[1/4] cc1.wasm  (.c -> .s) — fetching toolchain + sysroot…");
+  const cc1FetchStart = performance.now();
   const cc1 = await loadTool("cc1.mjs", "headers");
+  t.cc1Fetch = performance.now() - cc1FetchStart;
   cc1.Module.FS.writeFile(`/tmp/${sourceName}`, source);
   const cc1Start = performance.now();
   const cc1Rc = callMain(cc1, [
@@ -142,7 +160,8 @@ export async function compile(source, sourceName = "hello.c") {
     `/tmp/${sourceName}`,
     "-o", `/tmp/${baseNoExt}.s`,
   ]);
-  log(`      cc1 rc=${cc1Rc} in ${Math.round(performance.now() - cc1Start)}ms`);
+  t.cc1Run = performance.now() - cc1Start;
+  log(`      cc1 rc=${cc1Rc} — fetch+init ${fmt(t.cc1Fetch)}, compile ${fmt(t.cc1Run)}`);
   if (cc1.stderr.length) cc1.stderr.forEach((l) => log("      " + l, "warn"));
   if (cc1Rc !== 0) {
     log(`compile failed at stage 1 (cc1)`, "err");
@@ -153,7 +172,9 @@ export async function compile(source, sourceName = "hello.c") {
 
   // 2. as — .s → ELF .o
   log("[2/4] as.wasm   (.s -> .o)");
+  const asFetchStart = performance.now();
   const as = await loadTool("as.mjs", null);
+  t.asFetch = performance.now() - asFetchStart;
   as.Module.FS.writeFile(`/tmp/${baseNoExt}.s`, asmBytes);
   const asStart = performance.now();
   const asRc = callMain(as, [
@@ -161,7 +182,8 @@ export async function compile(source, sourceName = "hello.c") {
     `/tmp/${baseNoExt}.s`,
     "-o", `/tmp/${baseNoExt}.o`,
   ]);
-  log(`      as rc=${asRc} in ${Math.round(performance.now() - asStart)}ms`);
+  t.asRun = performance.now() - asStart;
+  log(`      as rc=${asRc} — fetch+init ${fmt(t.asFetch)}, assemble ${fmt(t.asRun)}`);
   if (as.stderr.length) as.stderr.forEach((l) => log("      " + l, "warn"));
   if (asRc !== 0) {
     log(`compile failed at stage 2 (as)`, "err");
@@ -172,7 +194,9 @@ export async function compile(source, sourceName = "hello.c") {
   // 3. ld — link with Retro68 sysroot (libretrocrt + libInterface + libc
   //    + libm + libgcc) using the multi-segment ld script.
   log("[3/4] ld.wasm   (.o -> ELF executable) — fetching libs…");
+  const ldFetchStart = performance.now();
   const ld = await loadTool("ld.mjs", "libs");
+  t.ldFetch = performance.now() - ldFetchStart;
   ld.Module.FS.writeFile(`/tmp/${baseNoExt}.o`, oBytes);
   const ldStart = performance.now();
   const ldRc = callMain(ld, [
@@ -191,7 +215,8 @@ export async function compile(source, sourceName = "hello.c") {
     "/sysroot/lib/libgcc.a",
     "--end-group",
   ]);
-  log(`      ld rc=${ldRc} in ${Math.round(performance.now() - ldStart)}ms`);
+  t.ldRun = performance.now() - ldStart;
+  log(`      ld rc=${ldRc} — fetch+init ${fmt(t.ldFetch)}, link ${fmt(t.ldRun)}`);
   if (ld.stderr.length) ld.stderr.forEach((l) => log("      " + l, "warn"));
   if (ldRc !== 0) {
     log(`compile failed at stage 3 (ld)`, "err");
@@ -201,11 +226,14 @@ export async function compile(source, sourceName = "hello.c") {
 
   // 4. Elf2Mac — ELF → single-fork MacBinary II APPL
   log("[4/4] Elf2Mac.wasm (ELF -> MacBinary II)");
+  const e2mFetchStart = performance.now();
   const e2m = await loadTool("Elf2Mac.mjs", null);
+  t.e2mFetch = performance.now() - e2mFetchStart;
   e2m.Module.FS.writeFile("/tmp/out.bin.gdb", elfBytes);
   const e2mStart = performance.now();
   const e2mRc = callMain(e2m, ["--elf2mac", "-o", "/tmp/out.bin"]);
-  log(`      Elf2Mac rc=${e2mRc} in ${Math.round(performance.now() - e2mStart)}ms`);
+  t.e2mRun = performance.now() - e2mStart;
+  log(`      Elf2Mac rc=${e2mRc} — fetch+init ${fmt(t.e2mFetch)}, convert ${fmt(t.e2mRun)}`);
   if (e2m.stderr.length) e2m.stderr.forEach((l) => log("      " + l, "warn"));
   if (e2mRc !== 0) {
     log(`compile failed at stage 4 (Elf2Mac)`, "err");
@@ -213,6 +241,35 @@ export async function compile(source, sourceName = "hello.c") {
   }
   const bin = e2m.Module.FS.readFile("/tmp/out.bin");
 
-  log(`done in ${Math.round(performance.now() - t0)}ms — ${bin.length}-byte MacBinary II`, "ok");
+  // Summary: where did the time actually go?
+  const total = performance.now() - t0;
+  const fetchTotal =
+    t.cc1Fetch + t.asFetch + t.ldFetch + t.e2mFetch;
+  const runTotal =
+    t.cc1Run + t.asRun + t.ldRun + t.e2mRun;
+  const fetchPct = Math.round((fetchTotal / total) * 100);
+  log(``);
+  log(
+    `done in ${fmt(total)} — ${bin.length}-byte MacBinary II`,
+    "ok",
+  );
+  log(
+    `  breakdown: ${fmt(fetchTotal)} fetching wasm + sysroot ` +
+      `(${fetchPct}%), ${fmt(runTotal)} actually compiling ` +
+      `(${100 - fetchPct}%)`,
+  );
+  if (!isWarm) {
+    log(
+      `  cold tab: cc1.wasm is ~3.3 MB brotli, sysroot.bin ~190 KB ` +
+        `brotli, libs blob ~1 MB brotli. Once cached the next compile ` +
+        `skips the network and runs in the "actually compiling" time only.`,
+    );
+  } else {
+    log(
+      `  warm tab: wasm + sysroot served from the browser HTTP cache ` +
+        `— the remaining "fetch+init" time is Emscripten Module ` +
+        `instantiation + the FS mounts (~200 file writes).`,
+    );
+  }
   return { ok: true, asm, bin };
 }
