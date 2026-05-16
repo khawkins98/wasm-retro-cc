@@ -1,35 +1,52 @@
 # wasm-retro-cc
 
-> **Status (May 2026): Phase 2 SHIPPED.** End-to-end Build & Run
-> works in the [classic-vibe-mac](https://github.com/khawkins98/classic-vibe-mac)
-> playground as of 2026-05-15. Click Build & Run on
-> [`wasm-hello/hello.c`](https://github.com/khawkins98/classic-vibe-mac/tree/main/src/app/wasm-hello)
-> in the browser; this toolchain produces a MacBinary II APPL from C
-> source and it boots cleanly in BasiliskII — "Hello, World!"
-> rendered via `DrawString`. First time anyone has compiled classic
-> Mac C in a tab and watched it launch.
->
-> All four WASM binaries are byte-identical-or-equivalent to native:
-> `cc1.wasm` (3.27 MB brotli), `as.wasm` (270 KB brotli),
-> `ld.wasm` (304 KB brotli), `Elf2Mac.wasm` (80 KB brotli) — total
-> **~3.9 MB brotli** in-browser toolchain, comfortably under the
-> 6-8 MB target. Vendored into classic-vibe-mac as
-> `sysroot-libs.bin` + the four `.wasm`/`.mjs` files under
-> `public/wasm-cc1/`.
->
-> Phase 1 (PCC native pipeline) archived in [`spike-pcc/`](./spike-pcc/).
-> Phase 2 sub-spike tracker [#11](https://github.com/khawkins98/wasm-retro-cc/issues/11)
-> closed. What's next for the playground's in-browser C path tracked in
-> [classic-vibe-mac #100](https://github.com/khawkins98/classic-vibe-mac/issues/100)
-> (multi-file C, mixed C+.r, backend abstraction).
+A WebAssembly build of the [Retro68](https://github.com/autc04/Retro68)
+toolchain. Compiles C source into a real classic Macintosh 68k app —
+in a browser tab, no install required. The four wasm tools
+(`cc1`, GNU `as`, GNU `ld`, `Elf2Mac`) total ~3.9 MB brotli.
 
-A WebAssembly C compiler targeting the classic Macintosh 68k, designed
-for use inside browser-based emulators like
-[classic-vibe-mac](https://github.com/khawkins98/classic-vibe-mac).
+## Live demo
+
+**[khawkins98.github.io/wasm-retro-cc](https://khawkins98.github.io/wasm-retro-cc/)**
+— edit a tiny Toolbox `hello.c`, click Compile, see the m68k assembly
+and a hex dump of the resulting MacBinary II, download the `.bin`,
+or hand it to classic-vibe-mac for an in-tab System 7 boot.
+
+For the full editor experience (System 7.5.5 boots in the tab, your
+build hot-loads, 21 sample apps you can edit, multi-file projects,
+optimisation levels), open the sibling
+[**classic-vibe-mac**](https://khawkins98.github.io/classic-vibe-mac/)
+playground.
+
+## Status
+
+Phase 2 shipped 2026-05-15. The compiler chain runs end-to-end in
+production: click Build & Run in the cv-mac playground; a `.c` file
+goes through `cc1` → `as` → `ld` → `Elf2Mac` → MacBinary II in your
+browser, gets hot-loaded into BasiliskII, and the app launches and
+draws to the screen. First time anyone has compiled classic Mac C
+in a browser tab and watched it boot.
+
+The four WASM binaries are byte-identical-or-equivalent to native:
+
+- `cc1.wasm` — 3.27 MB brotli (the C compiler from GCC)
+- `as.wasm` — 270 KB brotli (the assembler from GNU binutils)
+- `ld.wasm` — 304 KB brotli (the linker from GNU binutils)
+- `Elf2Mac.wasm` — 80 KB brotli (Retro68's ELF→MacBinary converter)
+
+Vendored into classic-vibe-mac as `sysroot-libs.bin` plus the four
+`.wasm`/`.mjs` pairs under `public/wasm-cc1/`. Phase 2 sub-spike
+tracker [#11](https://github.com/khawkins98/wasm-retro-cc/issues/11)
+is closed. Phase 1 (PCC native pipeline) is archived in
+[`spike-pcc/`](./spike-pcc/).
+
+What comes next for the in-browser compile path is tracked in
+[classic-vibe-mac #100](https://github.com/khawkins98/classic-vibe-mac/issues/100)
+(multi-file C, mixed C + `.r`, backend abstraction).
 
 ---
 
-## Phase 2 status — shipped 2026-05-15
+## Phase 2 details
 
 All Phase 2 sub-spikes complete. The compiler chain runs end-to-end
 in production: a user clicks Build & Run in the cv-mac playground, a
@@ -78,28 +95,6 @@ nine hours of bisect work — the trigger for the Phase 2 pivot.
 Full retrospective in [`spike-pcc/ARCHIVE.md`](./spike-pcc/ARCHIVE.md).
 
 ---
-
-## What this is
-
-A WebAssembly build of Retro68's classic-Mac 68k C toolchain — `cc1`,
-GNU `as`, GNU `ld`, and `Elf2Mac` — packaged so a JavaScript host
-can compile C source code targeting `m68k-apple-macos` entirely in a
-browser tab, returning a valid MacBinary II APPL. No backend, no
-GitHub Actions detour, no local toolchain install.
-
-## Live demo
-
-**[khawkins98.github.io/wasm-retro-cc](https://khawkins98.github.io/wasm-retro-cc/)** —
-edit a tiny Toolbox `hello.c`, click Compile, see the m68k assembly +
-hex-dumped MacBinary II, download the `.bin`. Runs the full
-cc1 → as → ld → Elf2Mac pipeline in your browser; no install, no
-build step, no emulator required. Source under
-[`web-demo/`](./web-demo/).
-
-For the full editor + emulator experience (System 7.5.5 boots, your
-build hot-loads, multi-file projects, optimisation levels, etc.) see
-the sibling [`classic-vibe-mac`](https://khawkins98.github.io/classic-vibe-mac/)
-playground.
 
 ## Two-repo project
 
