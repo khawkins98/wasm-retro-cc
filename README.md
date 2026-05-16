@@ -27,15 +27,19 @@ browser, gets hot-loaded into BasiliskII, and the app launches and
 draws to the screen. First time anyone has compiled classic Mac C
 in a browser tab and watched it boot.
 
-The four WASM binaries are byte-identical-or-equivalent to native:
+The four WASM binaries are byte-identical-or-equivalent to native.
+Raw / brotli sizes:
 
-- `cc1.wasm` — 3.27 MB brotli (the C compiler from GCC)
-- `as.wasm` — 270 KB brotli (the assembler from GNU binutils)
-- `ld.wasm` — 304 KB brotli (the linker from GNU binutils)
-- `Elf2Mac.wasm` — 80 KB brotli (Retro68's ELF→MacBinary converter)
+- `cc1.wasm` — 12.6 MB raw, 3.27 MB brotli (the C compiler from GCC)
+- `as.wasm` — 782 KB raw, 270 KB brotli (the assembler from GNU binutils)
+- `ld.wasm` — 1.0 MB raw, 304 KB brotli (the linker from GNU binutils)
+- `Elf2Mac.wasm` — 285 KB raw, 80 KB brotli (Retro68's ELF→MacBinary converter)
+
+Browsers fetch the brotli-compressed versions on the wire, decompress
+to raw at instantiation time. Total over the wire: ~3.9 MB.
 
 Vendored into classic-vibe-mac as `sysroot-libs.bin` plus the four
-`.wasm`/`.mjs` pairs under `public/wasm-cc1/`. Phase 2 sub-spike
+`.wasm`/`.mjs` pairs under `src/web/public/wasm-cc1/`. Phase 2 sub-spike
 tracker [#11](https://github.com/khawkins98/wasm-retro-cc/issues/11)
 is closed. Phase 1 (PCC native pipeline) is archived in
 [`spike-pcc/`](./spike-pcc/).
@@ -107,23 +111,36 @@ If you found this repo *via* `classic-vibe-mac`, the toolchain you
 care about is the four `.wasm`/`.mjs` files under `dist/show-asm/`
 plus the bundle script that packages them with the Retro68 sysroot.
 
-If you found this repo on its own, **it's reusable.** Nothing here
-is `classic-vibe-mac`-specific — the JS API takes source files and
-returns a MacBinary, and the consumer decides what to do with it.
-Plausible other uses:
+If you found this repo on its own, **it's reusable** — but the
+distribution model is "vendor the artifacts," not "npm install."
+This package is not currently published to npm; the manifest
+deliberately doesn't have a `main` entry point. The way to
+consume the toolchain in your own project is to copy the four
+`.wasm` + `.mjs` pairs (plus `sysroot.bin` / `sysroot.index.json`
+and the libs blob) out of `dist/show-asm/`, host them yourself,
+and drive them from a small driver script.
 
-- A retro-Mac-C tutorial site that compiles user code in-browser as
-  a teaching tool.
+For a reference driver in ~200 lines, see
+[`web-demo/compile.mjs`](./web-demo/compile.mjs) — it loads the
+four wasm tools end-to-end, mounts the sysroot blobs into each
+Emscripten module's MEMFS, and returns a MacBinary II byte array
+from a C source string. The classic-vibe-mac side does the same
+in [`src/web/src/playground/cc1.ts`](https://github.com/khawkins98/classic-vibe-mac/blob/main/src/web/src/playground/cc1.ts)
+with multi-file C and per-stage diagnostics added on.
+
+Plausible non-cv-mac uses:
+
+- A retro-Mac-C tutorial site that compiles user code in-browser
+  as a teaching tool.
 - A static-site IDE for hobbyist classic Mac apps with no server.
 - A retro-Mac-code-golf scoreboard that builds + runs submissions
   client-side.
-- A Mac-in-the-browser project that wants to ship "edit and rebuild"
-  for its own bundled apps.
+- A Mac-in-the-browser project that wants to ship "edit and
+  rebuild" for its own bundled apps.
 
-We use it for `classic-vibe-mac`, but if you find another use, the
-public surface area is just the four wasm modules + the sysroot
-bundle. PRs welcome if your use case surfaces something that needs
-abstracting.
+We use it for `classic-vibe-mac`, but if you find another use,
+file an issue with what would have made the artifact-vendoring
+path easier and we'll consider abstracting it.
 
 ---
 
