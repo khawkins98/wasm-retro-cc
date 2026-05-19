@@ -305,8 +305,33 @@ wasm-retro-cc/
 
 ## License
 
-This repository does not yet have a top-level `LICENSE` file — that's
-on the punch list for Phase 2 packaging. Upstream licenses for vendored
-components: PCC (BSD-style), Retro68 / Elf2Mac (GPLv2). Provenance is
-tracked in `LEARNINGS.md` and `spike-pcc/ARCHIVE.md`; consult upstream
-sources before redistribution.
+**This project is licensed under [GPL-3.0-or-later](./LICENSE).**
+
+This matches the upstream license inheritance — the toolchain wraps
+binutils-derived assemblers and linkers (GPL-2.0+) and Retro68's
+Elf2Mac (GPL-derived), with a BSD-style C compiler (PCC). GPLv3 is
+the compatible umbrella for all of them.
+
+### What does this mean for code I compile with this toolchain?
+
+A note on what GPLv3 does and doesn't cover. **This project — the
+compiler toolchain itself — is GPL-3.0-or-later.** If you fork or
+modify *this project*, your fork is GPLv3-bound. **However**, programs
+you compile *using* this toolchain are entirely your own work, the
+same way programs compiled with GCC are not GPL just because GCC is.
+License your own apps however you want.
+
+This is the same principle as the [GCC Runtime Library Exception](https://www.gnu.org/licenses/gcc-exception-3.1.html) —
+the compiler's license governs the compiler, not its output.
+
+### Upstream licenses
+
+| Component | Upstream | License |
+|---|---|---|
+| `cc1.wasm` | PCC | BSD-style |
+| `as.wasm`, `ld.wasm` | binutils-derived | GPL-2.0-or-later |
+| `Elf2Mac.wasm` | Retro68 | GPL-derived |
+| sysroot headers / libs | Retro68 runtime | various permissive |
+
+Provenance for each is tracked in `LEARNINGS.md` and
+`spike-pcc/ARCHIVE.md`.
