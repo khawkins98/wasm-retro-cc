@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "A WebAssembly build of the Retro68 toolchain (cc1 + as + ld + Elf2Mac). Compiles C source into a classic Macintosh 68k MacBinary II app, in-browser. Distributed as vendored artifact files (see CONTRIBUTING.md), not currently published to npm.",
   "keywords": ["macintosh", "68k", "wasm", "compiler", "retro", "retro68"],
-  "license": "SEE LICENSE IN README.md",
+  "license": "GPL-3.0-or-later",
   "private": true,
   "homepage": "https://khawkins98.github.io/wasm-retro-cc/",
   "repository": {
